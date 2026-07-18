@@ -1,5 +1,20 @@
 # Repo Guidelines
 
+## Mandatory planning workflow
+
+Before changing providers, model IDs, model selection, transcription, screen analysis, Groq limits, streaming, or fallbacks:
+
+1. Use the project skill `skills/cheating-helper-planner/SKILL.md`.
+2. Read `PROJECT_PROMPT.md`, `AGENT_MAP.md`, and the relevant file in `tasks/`.
+3. Keep research subagents read-only; use the roles in `AGENT_MAP.md`.
+4. Map model capabilities before proposing selectors. Text, vision, live audio, transcription, and local inference are separate roles.
+5. Verify model availability and quotas from official provider sources.
+6. Record questions instead of guessing defaults or fallback order.
+7. Do not edit application code until the user confirms the written plan.
+8. Mark a task `DONE` only after every checkbox, acceptance criterion, and recorded check passes.
+
+Prefer the current JavaScript/Lit architecture for small fixes. The TypeScript/React/Shadcn material below is aspirational and must not trigger a migration unless the user explicitly requests it.
+
 This repository is a fork of [`cheating-daddy`](https://github.com/sohzm/cheating-daddy).
 It provides an Electron-based real‑time assistant which captures screen and audio
 for contextual AI responses. The code is JavaScript and uses Electron Forge for

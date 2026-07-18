@@ -193,6 +193,8 @@ export class CustomizeView extends LitElement {
         isRestoring: { type: Boolean },
         clearStatusMessage: { type: String },
         clearStatusType: { type: String },
+        providerMode: { type: String },
+        hostedTextModel: { type: String },
     };
 
     constructor() {
@@ -216,6 +218,8 @@ export class CustomizeView extends LitElement {
         this.audioMode = 'speaker_only';
         this.customPrompt = '';
         this.theme = 'dark';
+        this.providerMode = 'byok';
+        this.hostedTextModel = 'openai/gpt-oss-120b';
         this._loadFromStorage();
     }
 
@@ -232,6 +236,8 @@ export class CustomizeView extends LitElement {
             this.audioMode = prefs.audioMode ?? 'speaker_only';
             this.customPrompt = prefs.customPrompt ?? '';
             this.theme = prefs.theme ?? 'dark';
+            this.providerMode = prefs.providerMode === 'local' ? 'local' : 'byok';
+            this.hostedTextModel = prefs.hostedTextModel ?? 'openai/gpt-oss-120b';
             if (keybinds) {
                 this.keybinds = { ...this.getDefaultKeybinds(), ...keybinds };
             }
@@ -358,6 +364,12 @@ export class CustomizeView extends LitElement {
     async handleAudioModeSelect(e) {
         this.audioMode = e.target.value;
         await cheatingDaddy.storage.updatePreference('audioMode', this.audioMode);
+        this.requestUpdate();
+    }
+
+    async handleHostedTextModelSelect(e) {
+        this.hostedTextModel = e.target.value;
+        await cheatingDaddy.storage.updatePreference('hostedTextModel', this.hostedTextModel);
         this.requestUpdate();
     }
 
@@ -490,6 +502,7 @@ export class CustomizeView extends LitElement {
                 backgroundTransparency: 0.8,
                 googleSearchEnabled: false,
                 theme: 'dark',
+                hostedTextModel: 'openai/gpt-oss-120b',
             };
             for (const [key, value] of Object.entries(defaults)) {
                 await cheatingDaddy.storage.updatePreference(key, value);
@@ -513,6 +526,7 @@ export class CustomizeView extends LitElement {
             this.googleSearchEnabled = defaults.googleSearchEnabled;
             this.customPrompt = defaults.customPrompt;
             this.theme = defaults.theme;
+            this.hostedTextModel = defaults.hostedTextModel;
 
             // Notify parent callbacks
             this.onProfileChange(defaults.selectedProfile);
@@ -590,6 +604,28 @@ export class CustomizeView extends LitElement {
                             <option value="medium">Medium Quality</option>
                             <option value="low">Low Quality</option>
                         </select>
+                    </div>
+                </div>
+            </section>
+        `;
+    }
+
+    renderHostedModelsSection() {
+        if (this.providerMode !== 'byok') return '';
+
+        return html`
+            <section class="surface">
+                <div class="surface-title">AI Models</div>
+                <div class="surface-subtitle">Hosted</div>
+                <div class="form-grid">
+                    <div class="form-group">
+                        <label class="form-label">Text Response Model</label>
+                        <select class="control" .value=${this.hostedTextModel} @change=${this.handleHostedTextModelSelect}>
+                            <option value="openai/gpt-oss-120b">GPT-OSS 120B — Quality (recommended)</option>
+                            <option value="openai/gpt-oss-20b">GPT-OSS 20B — Faster</option>
+                            <option value="qwen/qwen3.6-27b">Qwen 3.6 27B — Alternative</option>
+                        </select>
+                        <div class="form-hint">Used only to generate text answers from transcripts and typed questions.</div>
                     </div>
                 </div>
             </section>
@@ -707,6 +743,7 @@ export class CustomizeView extends LitElement {
             <div class="unified-page">
                 <div class="unified-wrap">
                     <div class="page-title">Settings</div>
+                    ${this.renderHostedModelsSection()}
                     ${this.renderAudioSection()}
                     ${this.renderLanguageSection()}
                     ${this.renderAppearanceSection()}

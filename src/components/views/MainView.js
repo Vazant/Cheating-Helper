@@ -170,6 +170,10 @@ export class MainView extends LitElement {
             color: var(--text-muted);
         }
 
+        .form-hint.warning {
+            color: var(--warning);
+        }
+
         .form-hint a, .form-hint span.link {
             color: var(--accent);
             text-decoration: none;
@@ -845,6 +849,7 @@ export class MainView extends LitElement {
                 <div class="form-hint">
                     <span class="link" @click=${() => this.onExternalLink('https://console.groq.com/keys')}>Get Groq key</span>
                 </div>
+                <div class="form-hint warning">Required for hosted text answers. Gemini live audio can still start without it.</div>
             </div>
 
             ${this._renderStartButton()}

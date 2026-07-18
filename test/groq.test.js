@@ -1,0 +1,71 @@
+const assert = require('assert');
+const fs = require('fs');
+const {
+    DEFAULT_GROQ_MODEL,
+    getGroqFallbackOrder,
+    readGroqRateLimits,
+    getUsedRatio,
+    isNearRateLimit,
+    getGroqFallbackDecision,
+    getGroqErrorStatus,
+    readGroqSseEvent,
+    createSseParser,
+} = require('../src/utils/groq');
+
+assert.deepStrictEqual(getGroqFallbackOrder('openai/gpt-oss-20b'), [
+    'openai/gpt-oss-20b',
+    'openai/gpt-oss-120b',
+    'qwen/qwen3.6-27b',
+]);
+assert.strictEqual(getGroqFallbackOrder('retired/model')[0], DEFAULT_GROQ_MODEL);
+
+const values = new Map([
+    ['x-ratelimit-limit-requests', '1000'],
+    ['x-ratelimit-remaining-requests', '50'],
+    ['x-ratelimit-limit-tokens', '8000'],
+    ['x-ratelimit-remaining-tokens', '399'],
+    ['x-ratelimit-reset-requests', '2h'],
+    ['retry-after', '3'],
+]);
+const limits = readGroqRateLimits({ get: name => values.get(name) ?? null });
+assert.strictEqual(getUsedRatio(limits.requests), 0.95);
+assert.strictEqual(getUsedRatio(limits.tokens), 0.950125);
+assert.strictEqual(getUsedRatio({ limit: 100, remaining: 101 }), 0);
+assert.strictEqual(getUsedRatio({ limit: 0, remaining: 0 }), null);
+assert.strictEqual(isNearRateLimit({ limit: 10000, remaining: 501 }), false);
+assert.strictEqual(isNearRateLimit({ limit: 10000, remaining: 500 }), true);
+assert.strictEqual(readGroqRateLimits({ get: () => 'bad' }).requests.limit, null);
+assert.strictEqual(readGroqRateLimits({ get: () => null }).requests.limit, null);
+
+assert.strictEqual(getGroqFallbackDecision(404, true, false, false), 'not-found');
+assert.strictEqual(getGroqFallbackDecision(404, false, false, false), null);
+assert.strictEqual(getGroqFallbackDecision(404, true, true, true), null);
+assert.strictEqual(getGroqFallbackDecision(429, true, false, false), 'rate-limit');
+assert.strictEqual(getGroqFallbackDecision(429, true, true, false), null);
+for (const status of [401, 403, 500, 503]) assert.strictEqual(getGroqFallbackDecision(status, true, false, false), null);
+
+const status429 = getGroqErrorStatus(429, DEFAULT_GROQ_MODEL, limits, 'limited');
+for (const detail of ['RPD 50/1000 remaining', 'RPD reset 2h', 'TPM 399/8000 remaining', 'retry-after 3']) assert.ok(status429.includes(detail));
+assert.ok(getGroqErrorStatus(401, DEFAULT_GROQ_MODEL, limits, 'bad key').includes('key or permission error (401)'));
+assert.ok(getGroqErrorStatus(403, DEFAULT_GROQ_MODEL, limits, 'blocked').includes('key or permission error (403)'));
+assert.ok(getGroqErrorStatus(404, DEFAULT_GROQ_MODEL, limits, 'missing').includes(DEFAULT_GROQ_MODEL));
+assert.ok(getGroqErrorStatus(500, DEFAULT_GROQ_MODEL, limits, 'down').includes('service error (500)'));
+
+const events = [];
+const parser = createSseParser(data => events.push(data));
+parser.push('data: {"choices":[{"delta":{"cont');
+parser.push('ent":"hello"}}]}\r\n\r\ndata: [DO');
+parser.push('NE]\n');
+parser.end();
+assert.deepStrictEqual(events, ['{"choices":[{"delta":{"content":"hello"}}]}', '[DONE]']);
+assert.deepStrictEqual(readGroqSseEvent(events[0]), { done: false, content: 'hello' });
+assert.deepStrictEqual(readGroqSseEvent('[DONE]'), { done: true, content: '' });
+assert.deepStrictEqual(readGroqSseEvent('{"choices":[{"delta":{}}]}'), { done: false, content: '' });
+assert.strictEqual(readGroqSseEvent('not-json'), null);
+
+const geminiSource = fs.readFileSync(require.resolve('../src/utils/gemini'), 'utf8');
+assert.strictEqual((geminiSource.match(/sendToGemma\(/g) || []).length, 1);
+assert.strictEqual((geminiSource.match(/sendToGroq\(/g) || []).length, 3);
+assert.ok(geminiSource.includes('Groq API key required for text responses'));
+
+console.log('Groq helpers: OK');

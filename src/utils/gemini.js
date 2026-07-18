@@ -3,8 +3,18 @@ const { BrowserWindow, ipcMain } = require('electron');
 const { spawn } = require('child_process');
 const { saveDebugAudio } = require('../audioUtils');
 const { getSystemPrompt } = require('./prompts');
-const { getAvailableModel, incrementLimitCount, getApiKey, getGroqApiKey, incrementCharUsage, getModelForToday } = require('../storage');
+const { getAvailableModel, incrementLimitCount, getApiKey, getGroqApiKey, getPreferences } = require('../storage');
 const { connectCloud, sendCloudAudio, sendCloudText, sendCloudImage, closeCloud, isCloudActive, setOnTurnComplete } = require('./cloud');
+const {
+    getGroqFallbackOrder,
+    readGroqRateLimits,
+    getUsedRatio,
+    isNearRateLimit,
+    getGroqFallbackDecision,
+    getGroqErrorStatus,
+    readGroqSseEvent,
+    createSseParser,
+} = require('./groq');
 
 // Lazy-loaded to avoid circular dependency (localai.js imports from gemini.js)
 let _localai = null;
@@ -18,6 +28,7 @@ let currentProviderMode = 'byok';
 
 // Groq conversation history for context
 let groqConversationHistory = [];
+let groqLimitWarnings = new Set();
 
 // Conversation tracking variables
 let currentSessionId = null;
@@ -82,6 +93,7 @@ function initializeNewSession(profile = null, customPrompt = null) {
     conversationHistory = [];
     screenAnalysisHistory = [];
     groqConversationHistory = [];
+    groqLimitWarnings.clear();
     currentProfile = profile;
     currentCustomPrompt = customPrompt;
     console.log('New conversation session started:', currentSessionId, 'profile:', profile);
@@ -200,12 +212,6 @@ async function getStoredSetting(key, defaultValue) {
     return defaultValue;
 }
 
-// helper to check if groq has been configured
-function hasGroqKey() {
-    const key = getGroqApiKey();
-    return key && key.trim() != ''
-}
-
 function trimConversationHistoryForGemma(history, maxChars=42000) {
     if(!history || history.length === 0) return [];
     let totalChars = 0;
@@ -226,10 +232,41 @@ function stripThinkingTags(text) {
     return text.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
 }
 
+function recordGroqRateLimits(rateLimits, model) {
+    for (const [name, metric] of Object.entries({ requests: rateLimits.requests, tokens: rateLimits.tokens })) {
+        const usedRatio = getUsedRatio(metric);
+        if (usedRatio === null) continue;
+        const warningKey = `${model}:${name}`;
+
+        if (!isNearRateLimit(metric)) {
+            groqLimitWarnings.delete(warningKey);
+        } else if (!groqLimitWarnings.has(warningKey)) {
+            groqLimitWarnings.add(warningKey);
+            console.warn(
+                `[Groq ${name === 'requests' ? 'RPD' : 'TPM'} warning] ${model}: ${(usedRatio * 100).toFixed(1)}% used` +
+                    (metric.reset ? `; resets in ${metric.reset}` : '')
+            );
+        }
+    }
+}
+
+function readGroqError(errorText) {
+    try {
+        const parsed = JSON.parse(errorText);
+        return {
+            code: parsed.error?.code || null,
+            message: parsed.error?.message || errorText,
+        };
+    } catch {
+        return { code: null, message: errorText || 'Unknown Groq error' };
+    }
+}
+
 async function sendToGroq(transcription) {
     const groqApiKey = getGroqApiKey();
     if (!groqApiKey) {
-        console.log('No Groq API key configured, skipping Groq response');
+        console.warn('A Groq API key is required for the selected hosted text model');
+        sendToRenderer('update-status', 'Groq API key required for text responses');
         return;
     }
 
@@ -238,110 +275,167 @@ async function sendToGroq(transcription) {
         return;
     }
 
-    const modelToUse = getModelForToday();
-    if (!modelToUse) {
-        console.log('All Groq daily limits exhausted');
-        sendToRenderer('update-status', 'Groq limits reached for today');
-        return;
-    }
+    const models = getGroqFallbackOrder(getPreferences().hostedTextModel);
 
-    console.log(`Sending to Groq (${modelToUse}):`, transcription.substring(0, 100) + '...');
-
-    groqConversationHistory.push({
+    const userTurn = {
         role: 'user',
-        content: transcription.trim()
-    });
+        content: transcription.trim(),
+    };
+    groqConversationHistory.push(userTurn);
+
+    const removeUserTurn = () => {
+        const index = groqConversationHistory.lastIndexOf(userTurn);
+        if (index !== -1) groqConversationHistory.splice(index, 1);
+    };
 
     if (groqConversationHistory.length > 20) {
         groqConversationHistory = groqConversationHistory.slice(-20);
     }
 
-    try {
-        const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-            method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${groqApiKey}`,
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-                model: modelToUse,
-                messages: [
-                    { role: 'system', content: currentSystemPrompt || 'You are a helpful assistant.' },
-                    ...groqConversationHistory
-                ],
-                stream: true,
-                temperature: 0.7,
-                max_tokens: 1024
-            })
-        });
+    let rateLimitFallbackAttempt = -1;
 
-        if (!response.ok) {
-            const errorText = await response.text();
-            console.error('Groq API error:', response.status, errorText);
-            sendToRenderer('update-status', `Groq error: ${response.status}`);
+    for (let index = 0; index < models.length; index++) {
+        const model = models[index];
+        console.log(`Sending to Groq (${model})`);
+
+        let response;
+        try {
+            response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+                method: 'POST',
+                headers: {
+                    Authorization: `Bearer ${groqApiKey}`,
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    model,
+                    messages: [
+                        { role: 'system', content: currentSystemPrompt || 'You are a helpful assistant.' },
+                        ...groqConversationHistory,
+                    ],
+                    stream: true,
+                    temperature: 0.7,
+                    max_tokens: 1024,
+                }),
+            });
+        } catch (error) {
+            removeUserTurn();
+            console.error('Groq network error:', error);
+            sendToRenderer('update-status', `Groq network error: ${error.message}`);
             return;
         }
 
-        const reader = response.body.getReader();
+        const rateLimits = readGroqRateLimits(response.headers);
+        recordGroqRateLimits(rateLimits, model);
+
+        if (!response.ok) {
+            const error = readGroqError(await response.text().catch(() => ''));
+            const nextModel = models[index + 1];
+            const isLimitedFallbackAttempt = index === rateLimitFallbackAttempt;
+            const fallbackReason = getGroqFallbackDecision(
+                response.status,
+                Boolean(nextModel),
+                rateLimitFallbackAttempt !== -1,
+                isLimitedFallbackAttempt
+            );
+
+            console.error(
+                '[Groq API error]',
+                JSON.stringify({
+                    event: 'groq_error',
+                    provider: 'groq',
+                    model,
+                    status: response.status,
+                    code: error.code,
+                    message: error.message,
+                    retryAfter: rateLimits.retryAfter,
+                    requests: rateLimits.requests,
+                    tokens: rateLimits.tokens,
+                })
+            );
+
+            if (fallbackReason) {
+                if (fallbackReason === 'rate-limit') rateLimitFallbackAttempt = index + 1;
+                console.warn(
+                    '[Groq model fallback]',
+                    JSON.stringify({
+                        event: 'model_fallback',
+                        provider: 'groq',
+                        fromModel: model,
+                        toModel: nextModel,
+                        status: response.status,
+                        code: error.code,
+                        retryAfter: rateLimits.retryAfter,
+                        requests: rateLimits.requests,
+                        tokens: rateLimits.tokens,
+                    })
+                );
+                sendToRenderer('update-status', `Groq ${model} failed (${response.status}); switching to ${nextModel}`);
+                continue;
+            }
+
+            removeUserTurn();
+            sendToRenderer('update-status', getGroqErrorStatus(response.status, model, rateLimits, error.message));
+            return;
+        }
+
+        const reader = response.body?.getReader();
+        if (!reader) {
+            removeUserTurn();
+            console.error('Groq response did not include a readable stream');
+            sendToRenderer('update-status', 'Groq returned an unreadable response');
+            return;
+        }
+
         const decoder = new TextDecoder();
         let fullText = '';
         let isFirst = true;
-
-        while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-
-            const chunk = decoder.decode(value, { stream: true });
-            const lines = chunk.split('\n').filter(line => line.trim() !== '');
-
-            for (const line of lines) {
-                if (line.startsWith('data: ')) {
-                    const data = line.slice(6);
-                    if (data === '[DONE]') continue;
-
-                    try {
-                        const json = JSON.parse(data);
-                        const token = json.choices?.[0]?.delta?.content || '';
-                        if (token) {
-                            fullText += token;
-                            const displayText = stripThinkingTags(fullText);
-                            if (displayText) {
-                                sendToRenderer(isFirst ? 'new-response' : 'update-response', displayText);
-                                isFirst = false;
-                            }
-                        }
-                    } catch (parseError) {
-                        // Skip invalid JSON chunks
-                    }
-                }
+        const parser = createSseParser(data => {
+            const event = readGroqSseEvent(data);
+            if (!event) {
+                console.warn('Ignoring malformed Groq SSE event');
+                return;
             }
+            if (event.done || !event.content) return;
+            fullText += event.content;
+            const displayText = stripThinkingTags(fullText);
+            if (displayText) {
+                sendToRenderer(isFirst ? 'new-response' : 'update-response', displayText);
+                isFirst = false;
+            }
+        });
+
+        try {
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                parser.push(decoder.decode(value, { stream: true }));
+            }
+            parser.push(decoder.decode());
+            parser.end();
+        } catch (error) {
+            removeUserTurn();
+            console.error('Groq streaming error:', error);
+            sendToRenderer('update-status', `Groq streaming error: ${error.message}`);
+            return;
         }
 
         const cleanedResponse = stripThinkingTags(fullText);
-        const modelKey = modelToUse.split('/').pop();
-
-        const systemPromptChars = (currentSystemPrompt || 'You are a helpful assistant.').length;
-        const historyChars = groqConversationHistory.reduce((sum, msg) => sum + (msg.content || '').length, 0);
-        const inputChars = systemPromptChars + historyChars;
-        const outputChars = cleanedResponse.length;
-
-        incrementCharUsage('groq', modelKey, inputChars + outputChars);
-
-        if (cleanedResponse) {
-            groqConversationHistory.push({
-                role: 'assistant',
-                content: cleanedResponse
-            });
-
-            saveConversationTurn(transcription, cleanedResponse);
+        if (!cleanedResponse) {
+            removeUserTurn();
+            console.error(
+                '[Groq protocol error]',
+                JSON.stringify({ event: 'empty_response', provider: 'groq', model, status: response.status })
+            );
+            sendToRenderer('update-status', `Groq returned no response content (${model})`);
+            return;
         }
 
-        console.log(`Groq response completed (${modelToUse})`);
-        sendToRenderer('update-status', 'Listening...');
+        groqConversationHistory.push({ role: 'assistant', content: cleanedResponse });
+        saveConversationTurn(transcription, cleanedResponse);
 
-    } catch (error) {
-        console.error('Error calling Groq API:', error);
-        sendToRenderer('update-status', 'Groq error: ' + error.message);
+        console.log(`Groq response completed (${model})`);
+        sendToRenderer('update-status', 'Listening...');
+        return;
     }
 }
 
@@ -397,13 +491,6 @@ async function sendToGemma(transcription) {
                 isFirst = false;
             }
         }
-
-        const systemPromptChars = (currentSystemPrompt || 'You are a helpful assistant.').length;
-        const historyChars = trimmedHistory.reduce((sum, msg) => sum + (msg.content || '').length, 0);
-        const inputChars = systemPromptChars + historyChars;
-        const outputChars = fullText.length;
-
-        incrementCharUsage('gemini', 'gemma-4-26b-a4b-it', inputChars + outputChars);
 
         if (fullText.trim()) {
             groqConversationHistory.push({
@@ -487,11 +574,7 @@ async function initializeGeminiSession(apiKey, customPrompt = '', profile = 'int
 
                     if (message.serverContent?.generationComplete) {
                         if (currentTranscription.trim() !== '') {
-                            if (hasGroqKey()) {
-                                sendToGroq(currentTranscription);
-                            } else {
-                                sendToGemma(currentTranscription);
-                            }
+                            sendToGroq(currentTranscription);
                             currentTranscription = '';
                         }
                         messageBuffer = '';
@@ -1012,11 +1095,7 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
         try {
             console.log('Sending text message:', text);
 
-            if (hasGroqKey()) {
-                sendToGroq(text.trim());
-            } else {
-                sendToGemma(text.trim());
-            }
+            sendToGroq(text.trim());
 
             await geminiSessionRef.current.sendRealtimeInput({ text: text.trim() });
             return { success: true };
