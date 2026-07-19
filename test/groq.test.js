@@ -9,6 +9,8 @@ const {
     getGroqFallbackDecision,
     getNextGroqKeyIndex,
     getGroqErrorStatus,
+    estimateTextTokens,
+    buildGroqRequestPlan,
     readGroqSseEvent,
     createSseParser,
 } = require('../src/utils/groq');
@@ -39,14 +41,30 @@ assert.strictEqual(getGroqFallbackDecision(404, false), null);
 for (const status of [401, 403, 429, 500, 503]) assert.strictEqual(getGroqFallbackDecision(status, true), null);
 assert.strictEqual(getNextGroqKeyIndex(429, 0, 3), 1);
 assert.strictEqual(getNextGroqKeyIndex(429, 2, 3), null);
-for (const status of [200, 401, 403, 404, 500, 503]) assert.strictEqual(getNextGroqKeyIndex(status, 0, 3), null);
+for (const status of [200, 401, 403, 404, 413, 500, 503]) assert.strictEqual(getNextGroqKeyIndex(status, 0, 3), null);
 
 const status429 = getGroqErrorStatus(429, DEFAULT_GROQ_MODEL, limits, 'limited');
 for (const detail of ['RPD 50/1000 remaining', 'RPD reset 2h', 'TPM 399/8000 remaining', 'retry-after 3']) assert.ok(status429.includes(detail));
 assert.ok(getGroqErrorStatus(401, DEFAULT_GROQ_MODEL, limits, 'bad key').includes('key or permission error (401)'));
 assert.ok(getGroqErrorStatus(403, DEFAULT_GROQ_MODEL, limits, 'blocked').includes('key or permission error (403)'));
 assert.ok(getGroqErrorStatus(404, DEFAULT_GROQ_MODEL, limits, 'missing').includes(DEFAULT_GROQ_MODEL));
+assert.ok(getGroqErrorStatus(413, DEFAULT_GROQ_MODEL, limits, 'large').includes('too large'));
 assert.ok(getGroqErrorStatus(500, DEFAULT_GROQ_MODEL, limits, 'down').includes('service error (500)'));
+
+assert.ok(estimateTextTokens('Ж'.repeat(300)) > estimateTextTokens('a'.repeat(300)));
+const history = [
+    { role: 'user', content: 'old question' },
+    { role: 'assistant', content: 'old answer' },
+    { role: 'user', content: 'recent question' },
+    { role: 'assistant', content: 'recent answer' },
+    { role: 'user', content: 'current question' },
+];
+const planned = buildGroqRequestPlan('system', history, { conversationContextEnabled: true, conversationContextCount: 1 });
+assert.deepStrictEqual(planned.messages.map(message => message.content), ['system', 'recent question', 'recent answer', 'current question']);
+assert.ok(planned.maxCompletionTokens <= 2048 && planned.maxCompletionTokens >= 1024);
+const noHistory = buildGroqRequestPlan('system', history, { conversationContextEnabled: false, conversationContextCount: 20 });
+assert.deepStrictEqual(noHistory.messages.map(message => message.content), ['system', 'current question']);
+assert.ok(buildGroqRequestPlan('Ж'.repeat(20000), [{ role: 'user', content: 'question' }]).error);
 
 const events = [];
 const parser = createSseParser(data => events.push(data));
@@ -73,7 +91,8 @@ assert.ok(geminiSource.includes("ipcMain.handle('initialize-gemini', async () =>
 assert.ok(geminiSource.includes('Gemini initialization is temporarily disabled'));
 assert.ok(geminiSource.includes("reasoning_effort: 'low'"));
 assert.ok(geminiSource.includes('include_reasoning: false'));
-assert.ok(geminiSource.includes('max_completion_tokens: 4096'));
+assert.ok(geminiSource.includes('max_completion_tokens: requestPlan.maxCompletionTokens'));
+assert.ok(geminiSource.includes('activateGroqApiKey(groqApiKey)'));
 assert.ok(geminiSource.includes("finishReason === 'length'"));
 
 const { getSystemPrompt } = require('../src/utils/prompts');
@@ -81,6 +100,7 @@ const systemPrompt = getSystemPrompt('interview', '', false);
 assert.ok(systemPrompt.includes('Use plain readable text'));
 assert.ok(systemPrompt.includes('Do not bold ordinary words'));
 assert.ok(systemPrompt.endsWith('Always finish the final sentence.'));
+assert.ok(systemPrompt.includes('Always reply in English'));
 
 const mainViewSource = fs.readFileSync(require.resolve('../src/components/views/MainView'), 'utf8');
 assert.ok(!mainViewSource.includes('Gemini API Key'));

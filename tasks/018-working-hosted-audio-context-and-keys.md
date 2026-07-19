@@ -1,6 +1,6 @@
 # 018 — Рабочий Hosted Groq: ключи, context, latency и voice commands
 
-Статус: `PLANNING`
+Статус: `IN_PROGRESS`
 
 Зависимости: `011`, `012`, `013`, `016`.
 
@@ -111,38 +111,38 @@ Latency policy:
 ### A — Groq keys и request budget
 
 1. `TODO` Ввести общий bounded attempt policy для Text/Vision/STT: каждый stable key ID максимум один раз, без wrap-around.
-2. `TODO` Не сохранять rotated key active до успешного response; при полном failure оставить исходный active.
+2. `DONE` Не сохранять rotated key active до успешного response; при полном failure оставить исходный active.
 3. `TODO` Защитить active update от concurrent requests.
-4. `TODO` Добавить явную ошибку `413` без key/model rotation.
-5. `TODO` Реализовать общий estimated-token request budget, completion до `2 048` и history trim полными парами.
+4. `DONE` Добавить явную ошибку `413` без key/model rotation.
+5. `DONE` Реализовать общий estimated-token request budget, completion до `2 048` и history trim полными парами.
 6. `TODO` Добавить integration-style mocked-fetch tests для order, persistence, all-429 и non-rotating statuses.
 
 ### B — Session context и latency
 
-7. `TODO` Создать frozen `currentGroqSession` на Start: profile ID/name, compiled prompt, model, behavior и `Speech Language`.
-8. `TODO` Добавить чистый `buildGroqMessages()`; system message обязателен во всех requests.
-9. `TODO` Применить `conversationContextEnabled/count` и hard token budget.
-10. `TODO` Удалить per-request чтение полного profile catalog.
-11. `TODO` Добавить безопасные latency timestamps и throttled streaming UI updates.
-12. `TODO` Защитить shared history/response UI от concurrent sends.
+7. `DONE` Создать frozen `currentGroqSession` на Start: profile ID/name, compiled prompt, model, behavior и `Speech Language`.
+8. `DONE` Добавить чистый request-plan builder; system message обязателен во всех requests.
+9. `DONE` Применить `conversationContextEnabled/count` и hard token budget.
+10. `DONE` Удалить per-request чтение полного profile catalog.
+11. `DONE` Добавить безопасные latency timestamps и throttled streaming UI updates.
+12. `DONE` Защитить shared history/response UI FIFO-очередью от concurrent sends; приоритет manual/voice ещё не выбран.
 
 ### C — Hosted voice commands
 
-13. `TODO` Исправить routing источника: system открывает только loopback, microphone — только `getUserMedia`.
-14. `TODO` Сохранять и полностью закрывать все tracks/processors/AudioContexts при Stop/restart/error.
-15. `TODO` Вынести provider-neutral source-scoped segmenter: resample, VAD, pre-roll, min/max duration, flush/reset.
-16. `TODO` Добавить stdlib WAV encoder PCM16 mono 16 kHz без новой зависимости.
-17. `TODO` Добавить Groq multipart STT через `fetch`; передавать ISO-639-1 из выбранного `Speech Language`; `Content-Type` для FormData вручную не задавать.
-18. `TODO` После одного non-empty transcript вызвать existing text pipeline ровно один раз.
-19. `TODO` Добавить bounded key rotation для STT, stage-specific status/error и utterance ID.
-20. `TODO` Добавить Audio Source и Hosted STT model settings только в совместимые группы.
+13. `DONE` Исправить routing источника: system открывает только loopback, microphone — только `getUserMedia`; legacy `both` нормализуется к system.
+14. `DONE` Сохранять и полностью закрывать все tracks/processors/AudioContexts при Stop/restart/error.
+15. `DONE` Вынести provider-neutral source-scoped segmenter: resample, VAD, pre-roll, min/max duration, flush/reset.
+16. `DONE` Добавить stdlib WAV encoder PCM16 mono 16 kHz без новой зависимости.
+17. `DONE` Добавить Groq multipart STT через `fetch`; передавать ISO-639-1 из выбранного `Speech Language`; `Content-Type` для FormData вручную не задавать.
+18. `DONE` После одного non-empty transcript вызвать existing text pipeline ровно один раз через FIFO queue.
+19. `DONE` Добавить bounded key rotation для STT, stage-specific status/error и utterance ID.
+20. `IN_PROGRESS` Добавить Audio Source и Hosted STT model settings только в совместимые группы: два источника готовы, STT пока фиксирован на Turbo.
 
 ### D — Проверка и выпуск
 
-21. `TODO` Dependency-free unit tests: source routing, PCM/resample, VAD, WAV, multipart, queue, key rotation, prompt lifecycle и принудительный configured language.
+21. `IN_PROGRESS` Dependency-free unit tests: request budget, language, source routing, resample/VAD/WAV и routing готовы; mocked STT/key E2E ожидает.
 22. `TODO` Windows smoke: system-only, mic-only, Stop/restart, permission denied, English/Russian, две быстрые реплики.
 23. `TODO` Live Groq smoke: typed HashMap, system-audio HashMap, microphone HashMap, forced/mock 429 rotation.
-24. `TODO` `node --check`, все tests, `npm run make`, hash нового installer.
+24. `DONE` `node --check`, все tests, Forge make/package artifact и hash нового installer.
 
 ## Критерии приёмки
 
@@ -167,6 +167,21 @@ Latency policy:
 3. После VAD автоматически отправлять каждую законченную реплику как вопрос без hotkey? Рекомендация: да, это соответствует описанному video/interview flow.
 4. Максимум сохранённых Groq keys: ограничить пятью, чтобы один `429` не создавал неограниченную серию requests? Рекомендация: да.
 5. Если пользователь вводит manual text во время обработки voice utterance: поставить его в общую очередь или вернуть `Busy`? Рекомендация: manual text получает приоритет, voice ждёт в очереди.
+
+## Фактическая реализация в ветке `codex/hosted-audio-context-keys`
+
+- Checkpoint до реализации: commit `153c6ed`, push `origin/codex/groq-model-limits`.
+- Добавлены frozen Groq session, configured output language, request budget и history trimming.
+- Text/Vision больше не сохраняют следующий key active до успешного response.
+- Добавлены provider-neutral segmenter и WAV encoder без зависимостей.
+- Hosted Groq принимает system/microphone PCM, транскрибирует Whisper Turbo и ставит transcript в FIFO text queue.
+- `System Audio` и `Microphone` взаимоисключающие; небезопасный `Both` скрыт и legacy value нормализуется.
+- `node test/audio.test.js`, `groq.test.js`, `profile.test.js`, `storage.test.js`, `vision.test.js` — PASS.
+- `node --check` изменённых runtime-файлов и `git diff --check` — PASS.
+- Forge make штатно завершился с кодом `0`; packaged ASAR содержит новый runtime.
+- Installer: `out/make/squirrel.windows/x64/Cheating Daddy-0.7.0 Setup.exe`, 226 006 528 bytes.
+- SHA-256: `57485C5218362628B847AF21460393060357322844C5988C3485F72BE8D05C85`.
+- Automated tests и package/make не являются окончательным подтверждением Windows audio; ручной system/microphone + live Groq smoke обязателен.
 
 ## Официальные источники
 

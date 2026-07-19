@@ -1,6 +1,6 @@
 # 016 — Лимиты AI Profile и видимость активного контекста
 
-Статус: `PLANNING`
+Статус: `IN_PROGRESS`
 
 ## Нормализованный промпт пользователя
 
@@ -150,10 +150,10 @@ Compiler добавляет одну общую инструкцию:
 4. `TODO` Сохранить oversized legacy profiles без потери данных, но помечать их `Over limit` и блокировать hosted send.
 5. `TODO` Очистить built-in v2 prompts от legacy-примеров, повторов и конфликтующих short/Markdown правил.
 6. `TODO` Перевести application-owned и built-in prompt-инструкции на английский; пользовательские custom/imported поля не переводить автоматически.
-7. `TODO` Добавить секцию `LANGUAGE`, скомпилированную из frozen `Speech Language`; не выполнять language detection по вопросу; сделать presets Length/Format ортогональными.
-8. `TODO` Реализовать общий Groq request budget: динамический completion до `2 048`, history trim полными парами и блокировку ниже `1 024` completion.
-9. `TODO` Возвращать resolved profile snapshot при старте и показывать реальный активный профиль в live UI.
-10. `TODO` Унифицировать Groq/Local session metadata.
+7. `DONE` Добавить секцию `LANGUAGE`, скомпилированную из frozen `Speech Language`; не выполнять language detection по вопросу; сделать presets Length/Format ортогональными.
+8. `DONE` Реализовать общий Groq request budget: динамический completion до `2 048`, history trim полными парами и блокировку ниже `1 024` completion.
+9. `IN_PROGRESS` Возвращать resolved profile snapshot при старте и показывать реальный активный профиль в live UI. Имя frozen-профиля уже отображается; безопасные size/hash metadata ещё не добавлены.
+10. `DONE` Унифицировать Groq/Local session metadata.
 11. `TODO` Добавить dependency-free unit/regression tests для принудительного configured language и провести ручной Groq smoke.
 
 ## Критерии приёмки

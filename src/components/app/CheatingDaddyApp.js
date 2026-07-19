@@ -369,6 +369,7 @@ export class CheatingDaddyApp extends LitElement {
         isRecording: { type: Boolean },
         sessionActive: { type: Boolean },
         selectedProfile: { type: String },
+        activeProfileName: { type: String },
         selectedLanguage: { type: String },
         responses: { type: Array },
         currentResponseIndex: { type: Number },
@@ -392,6 +393,7 @@ export class CheatingDaddyApp extends LitElement {
         this.isRecording = false;
         this.sessionActive = false;
         this.selectedProfile = 'interview';
+        this.activeProfileName = '';
         this.selectedLanguage = 'en-US';
         this.selectedScreenshotInterval = '5';
         this.selectedImageQuality = 'medium';
@@ -558,6 +560,7 @@ export class CheatingDaddyApp extends LitElement {
                 await ipcRenderer.invoke('close-session');
             }
             this.sessionActive = false;
+            this.activeProfileName = '';
             this._stopTimer();
             this.currentView = 'main';
         } else {
@@ -587,6 +590,7 @@ export class CheatingDaddyApp extends LitElement {
     async handleStart() {
         const prefs = await cheatingDaddy.storage.getPreferences();
         const providerMode = prefs.providerMode === 'cloud' ? 'byok' : prefs.providerMode || 'byok';
+        let sessionInfo = null;
 
         if (providerMode === 'cloud') {
             const creds = await cheatingDaddy.storage.getCredentials();
@@ -606,9 +610,10 @@ export class CheatingDaddyApp extends LitElement {
                 }
                 return;
             }
+            sessionInfo = { profile: { name: this.selectedProfile } };
         } else if (providerMode === 'local') {
-            const success = await cheatingDaddy.initializeLocal(this.selectedProfile);
-            if (!success) {
+            sessionInfo = await cheatingDaddy.initializeLocal(this.selectedProfile);
+            if (!sessionInfo) {
                 const mainView = this.shadowRoot.querySelector('main-view');
                 if (mainView && mainView.triggerApiKeyError) {
                     mainView.triggerApiKeyError();
@@ -625,15 +630,21 @@ export class CheatingDaddyApp extends LitElement {
                 return;
             }
 
-            const success = await cheatingDaddy.initializeGroq(this.selectedProfile);
-            if (!success) return;
+            sessionInfo = await cheatingDaddy.initializeGroq(this.selectedProfile);
+            if (!sessionInfo) return;
         }
 
-        if (prefs.visionProvider !== 'disabled' || providerMode !== 'byok') {
-            cheatingDaddy.startCapture(this.selectedScreenshotInterval, this.selectedImageQuality, providerMode !== 'byok');
+        const captureStarted = await cheatingDaddy.startCapture(this.selectedScreenshotInterval, this.selectedImageQuality, true);
+        if (!captureStarted) {
+            if (window.require) {
+                const { ipcRenderer } = window.require('electron');
+                await ipcRenderer.invoke('close-session');
+            }
+            return;
         }
         this.responses = [];
         this.currentResponseIndex = -1;
+        this.activeProfileName = sessionInfo?.profile?.name || this.selectedProfile;
         this.startTime = Date.now();
         this.sessionActive = true;
         this.currentView = 'assistant';
@@ -941,7 +952,7 @@ export class CheatingDaddyApp extends LitElement {
                         </svg>
                     </button>
                 </div>
-                <div class="live-bar-center">${profileLabels[this.selectedProfile] || 'Session'}</div>
+                <div class="live-bar-center">${this.activeProfileName || profileLabels[this.selectedProfile] || 'Session'}</div>
                 <div class="live-bar-right">
                     ${this.statusText ? html`<span class="live-bar-text">${this.statusText}</span>` : ''}
                     <span class="live-bar-text">${this.getElapsedTime()}</span>

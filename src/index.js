@@ -221,7 +221,7 @@ function setupStorageIpcHandlers() {
     ipcMain.handle('storage:compile-ai-profile', async (event, profile) => {
         try {
             const { compileProfile } = require('./utils/aiProfiles');
-            return { success: true, data: compileProfile(profile, false) };
+            return { success: true, data: compileProfile(profile, { language: storage.getPreferences().selectedLanguage }) };
         } catch (error) {
             return { success: false, error: error.message };
         }

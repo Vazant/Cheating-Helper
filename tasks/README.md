@@ -19,10 +19,10 @@
 | 009 | Hosted и Local Vision models | TODO | 008 |
 | 010 | Временно отключить Gemini | DONE | — |
 | 011 | Управление несколькими Groq API keys | DONE | 010 |
-| 012 | Groq STT, text response и screenshots | BLOCKED | Подтверждение pipeline/defaults |
+| 012 | Groq STT, text response и screenshots | IN_PROGRESS | 018 и Windows/Groq smoke |
 | 013 | Response quality and truncation | IN_PROGRESS | 008 |
 | 014 | AI Customization profiles | IN_PROGRESS | 013 |
 | 015 | AI Profiles UX and prompt audit | PLANNING | 014 |
-| 016 | Profile field limits and active context visibility | PLANNING | 013, 015 |
+| 016 | Profile field limits and active context visibility | IN_PROGRESS | 013, 015 |
 | 017 | Live AI Profile switching | TODO — FUTURE | 016 |
-| 018 | Working Hosted Groq: keys, context, latency and voice commands | PLANNING | 011, 012, 013, 016 |
+| 018 | Working Hosted Groq: keys, context, latency and voice commands | IN_PROGRESS | 011, 012, 013, 016 |

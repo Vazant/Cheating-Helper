@@ -13,6 +13,8 @@ fs.writeFileSync(path.join(configDir, 'credentials.json'), JSON.stringify({ groq
 
 try {
     const storage = require('../src/storage');
+    assert.strictEqual(storage.normalizeAudioMode('both'), 'speaker_only');
+    assert.strictEqual(storage.normalizeAudioMode('mic_only'), 'mic_only');
     storage.initializeStorage();
     assert.deepStrictEqual(storage.getGroqApiKeys(), ['legacy-key']);
     assert.strictEqual(storage.getCredentials().unrelated, 'preserved');

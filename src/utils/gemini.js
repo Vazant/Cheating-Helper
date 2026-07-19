@@ -6,6 +6,8 @@ const { getSystemPrompt } = require('./prompts');
 const { getAvailableModel, incrementLimitCount, getApiKey, getGroqApiKeySequence, activateGroqApiKey, getPreferences, getAiProfile } = require('../storage');
 const { connectCloud, sendCloudAudio, sendCloudText, sendCloudImage, closeCloud, isCloudActive, setOnTurnComplete } = require('./cloud');
 const { GROQ_VISION_MODEL, buildVisionPrompt } = require('./vision');
+const { getLanguageConfig } = require('./aiProfiles');
+const { createSpeechSegmenter, encodePcm16Wav } = require('./audioPipeline');
 const {
     getGroqFallbackOrder,
     readGroqRateLimits,
@@ -14,6 +16,7 @@ const {
     getGroqFallbackDecision,
     getNextGroqKeyIndex,
     getGroqErrorStatus,
+    buildGroqRequestPlan,
     readGroqSseEvent,
     createSseParser,
 } = require('./groq');
@@ -32,6 +35,13 @@ let currentProviderMode = 'groq';
 let groqConversationHistory = [];
 let groqLimitWarnings = new Set();
 let isVisionRequestActive = false;
+let currentGroqSession = null;
+let hostedAudioSegmenter = null;
+let hostedAudioSource = 'system';
+let hostedAudioQueue = Promise.resolve();
+let groqTextQueue = Promise.resolve();
+let hostedUtteranceId = 0;
+const pendingUtteranceIds = new Set();
 
 function getAiProfileSnapshot(id) {
     return JSON.parse(JSON.stringify(getAiProfile(id)));
@@ -268,7 +278,108 @@ function readGroqError(errorText) {
     }
 }
 
+function queueGroqText(text) {
+    const queued = groqTextQueue.then(() => sendToGroq(text));
+    groqTextQueue = queued.catch(error => {
+        console.error('[Groq text queue]', error.message);
+        sendToRenderer('update-status', `Groq request failed: ${error.message}`);
+        return false;
+    });
+    return queued;
+}
+
+async function transcribeGroqAudio(wavBuffer, language) {
+    const groqApiKeys = getGroqApiKeySequence();
+    if (!groqApiKeys.length) return { success: false, error: 'Groq API key required for speech recognition' };
+
+    for (let keyIndex = 0; keyIndex < groqApiKeys.length; keyIndex++) {
+        const form = new FormData();
+        form.append('model', 'whisper-large-v3-turbo');
+        form.append('response_format', 'json');
+        if (language?.code) form.append('language', language.code);
+        form.append('file', new Blob([wavBuffer], { type: 'audio/wav' }), 'utterance.wav');
+
+        let response;
+        try {
+            response = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
+                method: 'POST',
+                headers: { Authorization: `Bearer ${groqApiKeys[keyIndex]}` },
+                body: form,
+            });
+        } catch (error) {
+            return { success: false, error: `Groq STT network error: ${error.message}` };
+        }
+
+        const rateLimits = readGroqRateLimits(response.headers);
+        recordGroqRateLimits(rateLimits, 'whisper-large-v3-turbo', keyIndex + 1);
+        if (response.ok) {
+            const body = await response.json();
+            const text = typeof body.text === 'string' ? body.text.trim() : '';
+            if (!text) return { success: false, error: 'Groq STT returned an empty transcript' };
+            activateGroqApiKey(groqApiKeys[keyIndex]);
+            return { success: true, text };
+        }
+
+        const error = readGroqError(await response.text().catch(() => ''));
+        if (response.status === 429 && keyIndex + 1 < groqApiKeys.length) continue;
+        return { success: false, error: `Groq STT ${getGroqErrorStatus(response.status, 'whisper-large-v3-turbo', rateLimits, error.message)}` };
+    }
+    return { success: false, error: 'All configured Groq keys reached their speech recognition rate limit' };
+}
+
+async function processHostedUtterance(utteranceId, pcm16kBuffer) {
+    if (!currentGroqSession) return false;
+    if (pendingUtteranceIds.has(utteranceId)) return false;
+    pendingUtteranceIds.add(utteranceId);
+    try {
+        sendToRenderer('update-status', 'Transcribing...');
+        const result = await transcribeGroqAudio(encodePcm16Wav(pcm16kBuffer), currentGroqSession.language);
+        if (!result.success) {
+            console.error('[Groq STT error]', result.error);
+            sendToRenderer('update-status', result.error);
+            return false;
+        }
+        sendToRenderer('update-status', 'Answering...');
+        return queueGroqText(result.text);
+    } finally {
+        pendingUtteranceIds.delete(utteranceId);
+    }
+}
+
+function configureHostedAudio(audioMode) {
+    hostedAudioSegmenter?.reset();
+    hostedAudioSource = audioMode === 'mic_only' ? 'microphone' : 'system';
+    hostedAudioQueue = Promise.resolve();
+    hostedAudioSegmenter = createSpeechSegmenter({
+        onUtterance(audio) {
+            const utteranceId = ++hostedUtteranceId;
+            hostedAudioQueue = hostedAudioQueue
+                .then(() => processHostedUtterance(utteranceId, audio))
+                .catch(error => {
+                    console.error('[Hosted audio queue]', error.message);
+                    sendToRenderer('update-status', `Audio processing failed: ${error.message}`);
+                    return false;
+                });
+        },
+    });
+}
+
+function processHostedAudioChunk(source, data, mimeType) {
+    if (!hostedAudioSegmenter || source !== hostedAudioSource) return { success: true, ignored: true };
+    if (mimeType !== 'audio/pcm;rate=24000' || typeof data !== 'string') return { success: false, error: 'Unsupported audio format' };
+    const pcmBuffer = Buffer.from(data, 'base64');
+    return processHostedPcmBuffer(source, pcmBuffer);
+}
+
+function processHostedPcmBuffer(source, pcmBuffer) {
+    if (!hostedAudioSegmenter || source !== hostedAudioSource) return { success: true, ignored: true };
+    if (!pcmBuffer.length || pcmBuffer.length % 2 || pcmBuffer.length > 24000 * 2) return { success: false, error: 'Invalid audio chunk' };
+    hostedAudioSegmenter.push(pcmBuffer);
+    return { success: true };
+}
+
 async function sendToGroq(transcription) {
+    const requestReceivedAt = Date.now();
     const groqApiKeys = getGroqApiKeySequence();
     if (!groqApiKeys.length) {
         console.warn('A Groq API key is required for the selected hosted text model');
@@ -281,7 +392,7 @@ async function sendToGroq(transcription) {
         return false;
     }
 
-    const models = getGroqFallbackOrder(getPreferences().hostedTextModel);
+    const models = getGroqFallbackOrder(currentGroqSession?.model);
 
     const userTurn = {
         role: 'user',
@@ -294,9 +405,19 @@ async function sendToGroq(transcription) {
         if (index !== -1) groqConversationHistory.splice(index, 1);
     };
 
-    if (groqConversationHistory.length > 20) {
-        groqConversationHistory = groqConversationHistory.slice(-20);
+    const requestPlan = buildGroqRequestPlan(
+        currentGroqSession?.systemPrompt || currentSystemPrompt,
+        groqConversationHistory,
+        currentGroqSession?.behavior,
+        currentGroqSession?.tpmLimit
+    );
+    if (requestPlan.error) {
+        removeUserTurn();
+        console.warn('[Groq request budget]', requestPlan.error);
+        sendToRenderer('update-status', requestPlan.error);
+        return false;
     }
+    if (requestPlan.trimmedMessages > 0) console.log(`[Groq request budget] trimmed ${requestPlan.trimmedMessages} old history messages`);
 
     let keyIndex = 0;
 
@@ -306,6 +427,7 @@ async function sendToGroq(transcription) {
         console.log(`Sending to Groq (${model}, key ${keyIndex + 1}/${groqApiKeys.length})`);
 
         let response;
+        const fetchStartedAt = Date.now();
         try {
             response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
                 method: 'POST',
@@ -315,12 +437,12 @@ async function sendToGroq(transcription) {
                 },
                 body: JSON.stringify({
                     model,
-                    messages: [{ role: 'system', content: currentSystemPrompt || 'You are a helpful assistant.' }, ...groqConversationHistory],
+                    messages: requestPlan.messages,
                     stream: true,
                     temperature: 0.7,
                     ...(model.startsWith('openai/gpt-oss-')
-                        ? { reasoning_effort: 'low', include_reasoning: false, max_completion_tokens: 4096 }
-                        : { max_completion_tokens: 4096 }),
+                        ? { reasoning_effort: 'low', include_reasoning: false, max_completion_tokens: requestPlan.maxCompletionTokens }
+                        : { max_completion_tokens: requestPlan.maxCompletionTokens }),
                 }),
             });
         } catch (error) {
@@ -331,7 +453,9 @@ async function sendToGroq(transcription) {
         }
 
         const rateLimits = readGroqRateLimits(response.headers);
+        const headersReceivedAt = Date.now();
         recordGroqRateLimits(rateLimits, model, keyIndex + 1);
+        if (currentGroqSession && rateLimits.tokens.limit) currentGroqSession.tpmLimit = rateLimits.tokens.limit;
 
         if (!response.ok) {
             const error = readGroqError(await response.text().catch(() => ''));
@@ -357,7 +481,6 @@ async function sendToGroq(transcription) {
             if (nextKeyIndex !== null) {
                 const previousKeySlot = keyIndex + 1;
                 keyIndex = nextKeyIndex;
-                activateGroqApiKey(groqApiKeys[keyIndex]);
                 console.warn(
                     '[Groq key rotation]',
                     JSON.stringify({
@@ -405,6 +528,8 @@ async function sendToGroq(transcription) {
             return false;
         }
 
+        activateGroqApiKey(groqApiKey);
+
         const reader = response.body?.getReader();
         if (!reader) {
             removeUserTurn();
@@ -417,6 +542,9 @@ async function sendToGroq(transcription) {
         let fullText = '';
         let isFirst = true;
         let finishReason = null;
+        let lastRenderAt = 0;
+        let lastRenderedText = '';
+        let firstContentAt = null;
         const parser = createSseParser(data => {
             const event = readGroqSseEvent(data);
             if (!event) {
@@ -426,10 +554,14 @@ async function sendToGroq(transcription) {
             if (event.finishReason) finishReason = event.finishReason;
             if (event.done || !event.content) return;
             fullText += event.content;
+            if (!firstContentAt) firstContentAt = Date.now();
             const displayText = stripThinkingTags(fullText);
-            if (displayText) {
+            const now = Date.now();
+            if (displayText && (isFirst || now - lastRenderAt >= 40)) {
                 sendToRenderer(isFirst ? 'new-response' : 'update-response', displayText);
                 isFirst = false;
+                lastRenderAt = now;
+                lastRenderedText = displayText;
             }
         });
 
@@ -455,6 +587,20 @@ async function sendToGroq(transcription) {
             sendToRenderer('update-status', `Groq returned no response content (${model})`);
             return false;
         }
+        if (cleanedResponse !== lastRenderedText) sendToRenderer(isFirst ? 'new-response' : 'update-response', cleanedResponse);
+        const streamDoneAt = Date.now();
+        console.log(
+            '[Groq latency]',
+            JSON.stringify({
+                model,
+                keySlot: keyIndex + 1,
+                queueMs: fetchStartedAt - requestReceivedAt,
+                headersMs: headersReceivedAt - fetchStartedAt,
+                firstContentMs: firstContentAt ? firstContentAt - fetchStartedAt : null,
+                streamMs: streamDoneAt - (firstContentAt || headersReceivedAt),
+                totalMs: streamDoneAt - requestReceivedAt,
+            })
+        );
 
         groqConversationHistory.push({ role: 'assistant', content: cleanedResponse });
         saveConversationTurn(transcription, cleanedResponse);
@@ -467,7 +613,11 @@ async function sendToGroq(transcription) {
 
         console.log(`Groq response completed (${model})`);
         sendToRenderer('update-status', 'Listening...');
-        return true;
+        return {
+            success: true,
+            profile: { id: selectedProfile.id, name: selectedProfile.name },
+            promptCharacters: currentSystemPrompt.length,
+        };
     }
 
     removeUserTurn();
@@ -527,7 +677,6 @@ async function sendGroqImage(base64Data, prompt) {
             keySlot: keyIndex + 1,
         });
         if (response.status === 429 && keyIndex + 1 < groqApiKeys.length) {
-            activateGroqApiKey(groqApiKeys[keyIndex + 1]);
             continue;
         }
         return { success: false, error: getGroqErrorStatus(response.status, GROQ_VISION_MODEL, rateLimits, error.message) };
@@ -886,7 +1035,7 @@ async function startMacOSAudioCapture(geminiSessionRef) {
             } else if (currentProviderMode === 'local') {
                 getLocalAi().processLocalAudio(monoChunk);
             } else {
-                console.warn('Ignoring audio chunk in Groq text mode');
+                processHostedPcmBuffer('system', monoChunk);
             }
 
             if (process.env.DEBUG_AUDIO) {
@@ -1042,23 +1191,42 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
     ipcMain.handle('initialize-groq', async (event, profile = 'interview', customPrompt = '') => {
         if (!getGroqApiKeySequence().length) return false;
         currentProviderMode = 'groq';
+        const prefs = getPreferences();
         const selectedProfile = getAiProfileSnapshot(profile);
-        currentSystemPrompt = getSystemPrompt(selectedProfile, '', false);
+        const language = getLanguageConfig(prefs.selectedLanguage);
+        currentSystemPrompt = getSystemPrompt(selectedProfile, '', false, [], language.locale);
+        currentGroqSession = {
+            profileId: selectedProfile.id,
+            profileName: selectedProfile.name,
+            systemPrompt: currentSystemPrompt,
+            model: prefs.hostedTextModel,
+            behavior: { ...selectedProfile.behavior },
+            language,
+            tpmLimit: null,
+        };
+        configureHostedAudio(prefs.audioMode);
         initializeNewSession(profile, currentSystemPrompt);
         sessionParams = null;
         geminiSessionRef.current = null;
         return true;
     });
 
-    ipcMain.handle('initialize-local', async (event, ollamaHost, ollamaModel, whisperModel, profile, customPrompt) => {
+    ipcMain.handle('initialize-local', async (event, ollamaHost, ollamaModel, whisperModel, profile, customPrompt, language = 'en-US') => {
         currentProviderMode = 'local';
+        currentGroqSession = null;
         const selectedProfile = getAiProfileSnapshot(profile);
-        currentSystemPrompt = getSystemPrompt(selectedProfile, '', false);
-        const success = await getLocalAi().initializeLocalSession(ollamaHost, ollamaModel, whisperModel, selectedProfile, '');
+        currentSystemPrompt = getSystemPrompt(selectedProfile, '', false, [], language);
+        const success = await getLocalAi().initializeLocalSession(ollamaHost, ollamaModel, whisperModel, selectedProfile, '', language);
         if (!success) {
             currentProviderMode = 'groq';
         }
-        return success;
+        return success
+            ? {
+                  success: true,
+                  profile: { id: selectedProfile.id, name: selectedProfile.name },
+                  promptCharacters: currentSystemPrompt.length,
+              }
+            : false;
     });
 
     ipcMain.handle('send-audio-content', async (event, { data, mimeType }) => {
@@ -1082,7 +1250,7 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
                 return { success: false, error: error.message };
             }
         }
-        return { success: false, error: 'Audio is unavailable in Groq text mode' };
+        return processHostedAudioChunk('system', data, mimeType);
     });
 
     // Handle microphone audio on a separate channel
@@ -1107,7 +1275,7 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
                 return { success: false, error: error.message };
             }
         }
-        return { success: false, error: 'Microphone audio is unavailable in Groq text mode' };
+        return processHostedAudioChunk('microphone', data, mimeType);
     });
 
     ipcMain.handle('list-local-vision-models', async () => {
@@ -1196,7 +1364,7 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
 
         try {
             console.log('Sending text message to Groq');
-            sendToGroq(text.trim());
+            queueGroqText(text.trim());
             return { success: true };
         } catch (error) {
             console.error('Error sending text:', error);
@@ -1234,6 +1402,12 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
     ipcMain.handle('close-session', async event => {
         try {
             stopMacOSAudioCapture();
+            hostedAudioSegmenter?.reset();
+            hostedAudioSegmenter = null;
+            currentGroqSession = null;
+            pendingUtteranceIds.clear();
+            hostedAudioQueue = Promise.resolve();
+            groqTextQueue = Promise.resolve();
 
             if (currentProviderMode === 'cloud') {
                 closeCloud();

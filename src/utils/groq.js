@@ -1,5 +1,8 @@
 const DEFAULT_GROQ_MODEL = 'openai/gpt-oss-120b';
 const GROQ_MODELS = [DEFAULT_GROQ_MODEL, 'openai/gpt-oss-20b', 'qwen/qwen3.6-27b'];
+const DEFAULT_TPM_LIMIT = 8000;
+const MAX_COMPLETION_TOKENS = 2048;
+const MIN_COMPLETION_TOKENS = 1024;
 
 function getGroqFallbackOrder(selectedModel) {
     const primary = GROQ_MODELS.includes(selectedModel) ? selectedModel : DEFAULT_GROQ_MODEL;
@@ -65,12 +68,61 @@ function formatGroqRateLimits(rateLimits) {
 function getGroqErrorStatus(status, model, rateLimits, errorMessage) {
     if (status === 401 || status === 403) return `Groq key or permission error (${status}): ${errorMessage}`;
     if (status === 404) return `Groq model unavailable: ${model}`;
+    if (status === 413) return `Groq request is too large for ${model}; reduce the AI Profile or conversation context`;
     if (status === 429) {
         const details = formatGroqRateLimits(rateLimits);
         return `Groq rate limit reached for ${model}${details ? `; ${details}` : ''}`;
     }
     if (status >= 500) return `Groq service error (${status}); please try again later`;
     return `Groq error (${status}): ${errorMessage}`;
+}
+
+function estimateTextTokens(value) {
+    let ascii = 0;
+    let cyrillic = 0;
+    let other = 0;
+    for (const character of String(value || '')) {
+        const codePoint = character.codePointAt(0);
+        if (codePoint <= 0x7f) ascii++;
+        else if ((codePoint >= 0x0400 && codePoint <= 0x052f) || (codePoint >= 0x2de0 && codePoint <= 0x2dff)) cyrillic++;
+        else other++;
+    }
+    return Math.ceil(ascii / 3 + cyrillic / 2 + other);
+}
+
+function estimateMessagesTokens(messages) {
+    return (messages || []).reduce((total, message) => total + estimateTextTokens(message?.content), 32 + (messages || []).length * 12);
+}
+
+function buildGroqRequestPlan(systemPrompt, history, behavior = {}, tokenLimit = DEFAULT_TPM_LIMIT) {
+    const source = Array.isArray(history) ? history : [];
+    const currentTurn = source[source.length - 1];
+    if (!currentTurn || currentTurn.role !== 'user') return { error: 'Current user message is missing' };
+
+    const completed = source.slice(0, -1);
+    const pairCount = behavior.conversationContextEnabled === false ? 0 : Math.max(0, Math.min(Number(behavior.conversationContextCount) || 0, 20));
+    let retained = pairCount ? completed.slice(-pairCount * 2) : [];
+    const usableTokens = Math.floor(Math.max(Number(tokenLimit) || DEFAULT_TPM_LIMIT, MIN_COMPLETION_TOKENS) * 0.95) - 128;
+
+    let messages;
+    let inputTokens;
+    while (true) {
+        messages = [{ role: 'system', content: systemPrompt || 'You are a helpful assistant.' }, ...retained, currentTurn];
+        inputTokens = estimateMessagesTokens(messages);
+        if (inputTokens + MIN_COMPLETION_TOKENS <= usableTokens || retained.length < 2) break;
+        retained = retained.slice(2);
+    }
+
+    const maxCompletionTokens = Math.min(MAX_COMPLETION_TOKENS, usableTokens - inputTokens);
+    if (maxCompletionTokens < MIN_COMPLETION_TOKENS) {
+        return {
+            error: `Request exceeds the Groq TPM budget (${inputTokens} estimated input tokens; ${MIN_COMPLETION_TOKENS} required for the answer)`,
+            inputTokens,
+            usableTokens,
+        };
+    }
+
+    return { messages, inputTokens, maxCompletionTokens, trimmedMessages: completed.length - retained.length };
 }
 
 function readGroqSseEvent(data) {
@@ -107,6 +159,9 @@ function createSseParser(onData) {
 module.exports = {
     DEFAULT_GROQ_MODEL,
     GROQ_MODELS,
+    DEFAULT_TPM_LIMIT,
+    MAX_COMPLETION_TOKENS,
+    MIN_COMPLETION_TOKENS,
     getGroqFallbackOrder,
     readGroqRateLimits,
     getUsedRatio,
@@ -115,6 +170,9 @@ module.exports = {
     getNextGroqKeyIndex,
     formatGroqRateLimits,
     getGroqErrorStatus,
+    estimateTextTokens,
+    estimateMessagesTokens,
+    buildGroqRequestPlan,
     readGroqSseEvent,
     createSseParser,
 };

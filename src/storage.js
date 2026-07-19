@@ -51,6 +51,10 @@ function orderGroqApiKeys(keys, activeIndex) {
     return [...keys.slice(index), ...keys.slice(0, index)];
 }
 
+function normalizeAudioMode(value) {
+    return value === 'mic_only' ? 'mic_only' : 'speaker_only';
+}
+
 const DEFAULT_PREFERENCES = {
     customPrompt: '',
     providerMode: 'byok',
@@ -299,6 +303,7 @@ function getPreferences() {
     return {
         ...DEFAULT_PREFERENCES,
         ...saved,
+        audioMode: normalizeAudioMode(saved.audioMode),
         hostedTextModel: normalizeHostedTextModel(saved.hostedTextModel),
         visionProvider: normalizeVisionProvider(saved.visionProvider),
         groqVisionModel: GROQ_VISION_MODEL,
@@ -321,6 +326,7 @@ function setPreferences(preferences) {
     const updated = { ...persistedCurrent, ...preferences };
     updated.hostedTextModel = normalizeHostedTextModel(updated.hostedTextModel);
     updated.visionProvider = normalizeVisionProvider(updated.visionProvider);
+    updated.audioMode = normalizeAudioMode(updated.audioMode);
     updated.groqVisionModel = GROQ_VISION_MODEL;
     return writeJsonFile(getPreferencesPath(), updated);
 }
@@ -328,7 +334,13 @@ function setPreferences(preferences) {
 function updatePreference(key, value) {
     const preferences = getPreferences();
     preferences[key] =
-        key === 'hostedTextModel' ? normalizeHostedTextModel(value) : key === 'visionProvider' ? normalizeVisionProvider(value) : value;
+        key === 'hostedTextModel'
+            ? normalizeHostedTextModel(value)
+            : key === 'visionProvider'
+              ? normalizeVisionProvider(value)
+              : key === 'audioMode'
+                ? normalizeAudioMode(value)
+                : value;
     if (key === 'groqVisionModel') preferences[key] = GROQ_VISION_MODEL;
     return writeJsonFile(getPreferencesPath(), preferences);
 }
@@ -680,6 +692,7 @@ module.exports = {
     normalizeGroqApiKeys,
     normalizeGroqApiKeyIndex,
     orderGroqApiKeys,
+    normalizeAudioMode,
 
     // Preferences
     getPreferences,

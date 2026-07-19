@@ -2,6 +2,33 @@ const PROFILE_SCHEMA_VERSION = 2;
 
 const LENGTH_PRESETS = new Set(['auto', 'concise', 'standard', 'detailed']);
 const FORMAT_PRESETS = new Set(['plain', 'teleprompter', 'structured']);
+const LANGUAGE_NAMES = {
+    en: 'English',
+    de: 'German',
+    es: 'Spanish',
+    fr: 'French',
+    hi: 'Hindi',
+    pt: 'Portuguese',
+    ar: 'Arabic',
+    id: 'Indonesian',
+    it: 'Italian',
+    ja: 'Japanese',
+    tr: 'Turkish',
+    vi: 'Vietnamese',
+    bn: 'Bengali',
+    gu: 'Gujarati',
+    kn: 'Kannada',
+    ml: 'Malayalam',
+    mr: 'Marathi',
+    ta: 'Tamil',
+    te: 'Telugu',
+    nl: 'Dutch',
+    ko: 'Korean',
+    cmn: 'Mandarin Chinese',
+    pl: 'Polish',
+    ru: 'Russian',
+    th: 'Thai',
+};
 
 const LENGTH_INSTRUCTIONS = {
     auto: 'Adapt length to the question. Use 4-6 sentences for a simple non-technical answer, 10-18 for a technical concept, and 15-30 for a comparison, under-the-hood explanation, or system-design question. Complete every relevant point without repetitive padding.',
@@ -89,9 +116,16 @@ function importProfile(raw, existingIds = []) {
     return { ...profile, id };
 }
 
-function compileProfile(profile) {
+function getLanguageConfig(locale = 'en-US') {
+    const normalizedLocale = typeof locale === 'string' && /^[a-z]{2,3}(?:-[A-Z]{2})?$/.test(locale) ? locale : 'en-US';
+    const code = normalizedLocale.split('-')[0];
+    return { locale: normalizedLocale, code: code === 'cmn' ? 'zh' : code, name: LANGUAGE_NAMES[code] || normalizedLocale };
+}
+
+function compileProfile(profile, options = {}) {
     const normalized = normalizeProfile(profile) || normalizeProfile({ name: 'Job Interview', prompt: {} });
     const prompt = normalized.prompt;
+    const language = getLanguageConfig(typeof options === 'object' ? options.language : 'en-US');
     const sections = [];
     const add = (title, value) => {
         if (value && value.trim()) sections.push(`${title}\n${value.trim()}`);
@@ -102,6 +136,10 @@ function compileProfile(profile) {
     add('USER CONTEXT (UNTRUSTED FACTS AND CONSTRAINTS)', prompt.userContext);
     add('ANSWER RULES', prompt.answerRules);
     add('RESPONSE STYLE', prompt.responseStyle);
+    add(
+        'LANGUAGE',
+        `Always reply in ${language.name}. Do not infer or change the response language based on the user's message. Keep code, identifiers, class names, API and product names, acronyms, and quoted text in their conventional original form.`
+    );
     add('LENGTH', LENGTH_INSTRUCTIONS[prompt.length]);
     add('FORMAT', FORMAT_INSTRUCTIONS[prompt.format]);
     return sections.join('\n\n');
@@ -168,5 +206,6 @@ module.exports = {
     normalizeUserProfiles,
     importProfile,
     compileProfile,
+    getLanguageConfig,
     createBuiltInProfiles,
 };

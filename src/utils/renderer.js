@@ -6,6 +6,8 @@ let screenshotInterval = null;
 let audioContext = null;
 let audioProcessor = null;
 let micAudioProcessor = null;
+let micAudioContext = null;
+let micStream = null;
 let audioBuffer = [];
 const SAMPLE_RATE = 24000;
 const AUDIO_CHUNK_DURATION = 0.1; // seconds
@@ -186,9 +188,10 @@ async function initializeGemini(profile = 'interview', language = 'en-US') {
 }
 
 async function initializeGroq(profile = 'interview') {
-    const success = await ipcRenderer.invoke('initialize-groq', profile);
+    const result = await ipcRenderer.invoke('initialize-groq', profile);
+    const success = result === true || result?.success === true;
     cheatingDaddy.setStatus(success ? 'Groq text mode' : 'error');
-    return success;
+    return success ? result : false;
 }
 
 async function initializeLocal(profile = 'interview') {
@@ -196,10 +199,11 @@ async function initializeLocal(profile = 'interview') {
     const ollamaHost = prefs.ollamaHost || 'http://127.0.0.1:11434';
     const ollamaModel = prefs.ollamaModel || 'llama3.1';
     const whisperModel = prefs.whisperModel || 'Xenova/whisper-small';
-    const success = await ipcRenderer.invoke('initialize-local', ollamaHost, ollamaModel, whisperModel, profile);
+    const result = await ipcRenderer.invoke('initialize-local', ollamaHost, ollamaModel, whisperModel, profile, '', prefs.selectedLanguage || 'en-US');
+    const success = result === true || result?.success === true;
     if (success) {
         cheatingDaddy.setStatus('Local AI Live');
-        return true;
+        return result;
     } else {
         cheatingDaddy.setStatus('error');
         return false;
@@ -237,7 +241,7 @@ async function startCapture(screenshotIntervalSeconds = 5, imageQuality = 'mediu
 
     // Refresh preferences cache
     await loadPreferencesCache();
-    const audioMode = preferencesCache.audioMode || 'speaker_only';
+    const audioMode = preferencesCache.audioMode === 'mic_only' ? 'mic_only' : 'speaker_only';
 
     try {
         if (isMacOS) {
@@ -245,7 +249,7 @@ async function startCapture(screenshotIntervalSeconds = 5, imageQuality = 'mediu
             console.log('Starting macOS capture with SystemAudioDump...');
 
             // Start macOS audio capture
-            if (captureAudio) {
+            if (captureAudio && audioMode === 'speaker_only') {
                 const audioResult = await ipcRenderer.invoke('start-macos-audio');
                 if (!audioResult.success) throw new Error('Failed to start macOS audio capture: ' + audioResult.error);
             }
@@ -262,8 +266,7 @@ async function startCapture(screenshotIntervalSeconds = 5, imageQuality = 'mediu
 
             console.log('macOS screen capture started - audio handled by SystemAudioDump');
 
-            if (captureAudio && (audioMode === 'mic_only' || audioMode === 'both')) {
-                let micStream = null;
+            if (captureAudio && audioMode === 'mic_only') {
                 try {
                     micStream = await navigator.mediaDevices.getUserMedia({
                         audio: {
@@ -291,7 +294,7 @@ async function startCapture(screenshotIntervalSeconds = 5, imageQuality = 'mediu
                         width: { ideal: 1920 },
                         height: { ideal: 1080 },
                     },
-                    audio: captureAudio
+                    audio: captureAudio && audioMode === 'speaker_only'
                         ? {
                               sampleRate: SAMPLE_RATE,
                               channelCount: 1,
@@ -321,8 +324,7 @@ async function startCapture(screenshotIntervalSeconds = 5, imageQuality = 'mediu
             }
 
             // Additionally get microphone input for Linux based on audio mode
-            if (captureAudio && (audioMode === 'mic_only' || audioMode === 'both')) {
-                let micStream = null;
+            if (captureAudio && audioMode === 'mic_only') {
                 try {
                     micStream = await navigator.mediaDevices.getUserMedia({
                         audio: {
@@ -354,7 +356,7 @@ async function startCapture(screenshotIntervalSeconds = 5, imageQuality = 'mediu
                     width: { ideal: 1920 },
                     height: { ideal: 1080 },
                 },
-                audio: captureAudio
+                audio: captureAudio && audioMode === 'speaker_only'
                     ? {
                           sampleRate: SAMPLE_RATE,
                           channelCount: 1,
@@ -370,8 +372,7 @@ async function startCapture(screenshotIntervalSeconds = 5, imageQuality = 'mediu
             // Setup audio processing for Windows loopback audio only
             if (captureAudio && mediaStream.getAudioTracks().length) setupWindowsLoopbackProcessing();
 
-            if (captureAudio && (audioMode === 'mic_only' || audioMode === 'both')) {
-                let micStream = null;
+            if (captureAudio && audioMode === 'mic_only') {
                 try {
                     micStream = await navigator.mediaDevices.getUserMedia({
                         audio: {
@@ -391,6 +392,11 @@ async function startCapture(screenshotIntervalSeconds = 5, imageQuality = 'mediu
             }
         }
 
+        if (captureAudio && audioMode === 'speaker_only' && !isMacOS && !mediaStream?.getAudioTracks().length) {
+            throw new Error('System audio is unavailable for the selected screen');
+        }
+        if (captureAudio && audioMode === 'mic_only' && !micStream) throw new Error('Microphone is unavailable or permission was denied');
+
         console.log('MediaStream obtained:', {
             hasVideo: mediaStream.getVideoTracks().length > 0,
             hasAudio: mediaStream.getAudioTracks().length > 0,
@@ -399,16 +405,19 @@ async function startCapture(screenshotIntervalSeconds = 5, imageQuality = 'mediu
 
         // Manual mode only - screenshots captured on demand via shortcut
         console.log('Manual mode enabled - screenshots will be captured on demand only');
+        return true;
     } catch (err) {
         console.error('Error starting capture:', err);
+        stopCapture();
         cheatingDaddy.setStatus('error');
+        return false;
     }
 }
 
-function setupLinuxMicProcessing(micStream) {
+function setupLinuxMicProcessing(stream) {
     // Setup microphone audio processing for Linux
-    const micAudioContext = new AudioContext({ sampleRate: SAMPLE_RATE });
-    const micSource = micAudioContext.createMediaStreamSource(micStream);
+    micAudioContext = new AudioContext({ sampleRate: SAMPLE_RATE });
+    const micSource = micAudioContext.createMediaStreamSource(stream);
     const micProcessor = micAudioContext.createScriptProcessor(BUFFER_SIZE, 1, 1);
 
     let audioBuffer = [];
@@ -715,6 +724,16 @@ function stopCapture() {
     if (audioContext) {
         audioContext.close();
         audioContext = null;
+    }
+
+    if (micAudioContext) {
+        micAudioContext.close();
+        micAudioContext = null;
+    }
+
+    if (micStream) {
+        micStream.getTracks().forEach(track => track.stop());
+        micStream = null;
     }
 
     if (mediaStream) {

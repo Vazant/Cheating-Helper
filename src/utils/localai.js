@@ -2,6 +2,7 @@ const { Ollama } = require('ollama');
 const { getSystemPrompt } = require('./prompts');
 const { sendToRenderer, initializeNewSession, saveConversationTurn } = require('./gemini');
 const { hasVisionCapability } = require('./vision');
+const { getLanguageConfig } = require('./aiProfiles');
 
 // ── State ──
 
@@ -12,6 +13,7 @@ let isWhisperLoading = false;
 let localConversationHistory = [];
 let currentSystemPrompt = null;
 let isLocalActive = false;
+let speechLanguage = 'en';
 
 // VAD state
 let isSpeaking = false;
@@ -167,7 +169,7 @@ async function transcribeAudio(pcm16kBuffer) {
         // Whisper expects audio at 16kHz which is what we have
         const result = await whisperPipeline(float32Audio, {
             sampling_rate: 16000,
-            language: 'en',
+            language: speechLanguage,
             task: 'transcribe',
         });
 
@@ -264,14 +266,16 @@ async function sendToOllama(transcription) {
 
 // ── Public API ──
 
-async function initializeLocalSession(ollamaHost, model, whisperModel, profile, customPrompt) {
+async function initializeLocalSession(ollamaHost, model, whisperModel, profile, customPrompt, language = 'en-US') {
     console.log('[LocalAI] Initializing local session:', { ollamaHost, model, whisperModel, profile });
 
     sendToRenderer('session-initializing', true);
 
     try {
         // Setup system prompt
-        currentSystemPrompt = getSystemPrompt(profile, customPrompt, false);
+        const languageConfig = getLanguageConfig(language);
+        speechLanguage = languageConfig.code;
+        currentSystemPrompt = getSystemPrompt(profile, customPrompt, false, [], languageConfig.locale);
 
         // Initialize Ollama client
         ollamaClient = new Ollama({ host: ollamaHost });

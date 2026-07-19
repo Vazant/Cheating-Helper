@@ -37,6 +37,12 @@ export class CustomizeView extends LitElement {
                 transform: rotate(45deg);
             }
 
+            .field-help {
+                color: var(--text-muted);
+                font-size: var(--font-size-xs);
+                line-height: 1.4;
+            }
+
             .toggle-row {
                 display: flex;
                 align-items: center;
@@ -248,7 +254,7 @@ export class CustomizeView extends LitElement {
             this.googleSearchEnabled = prefs.googleSearchEnabled ?? true;
             this.backgroundTransparency = prefs.backgroundTransparency ?? 0.8;
             this.fontSize = prefs.fontSize ?? 20;
-            this.audioMode = prefs.audioMode ?? 'speaker_only';
+            this.audioMode = prefs.audioMode === 'mic_only' ? 'mic_only' : 'speaker_only';
             this.customPrompt = prefs.customPrompt ?? '';
             this.theme = prefs.theme ?? 'dark';
             this.providerMode = prefs.providerMode === 'local' ? 'local' : 'byok';
@@ -670,18 +676,11 @@ export class CustomizeView extends LitElement {
                     <div class="form-group">
                         <label class="form-label">Audio Mode</label>
                         <select class="control" .value=${this.audioMode} @change=${this.handleAudioModeSelect}>
-                            <option value="speaker_only">Speaker Only (Interviewer)</option>
-                            <option value="mic_only">Microphone Only (Me)</option>
-                            <option value="both">Both Speaker and Microphone</option>
+                            <option value="speaker_only">System Audio</option>
+                            <option value="mic_only">Microphone</option>
                         </select>
                     </div>
-                    ${
-                        this.audioMode !== 'speaker_only'
-                            ? html`
-                                  <div class="warning-callout">May cause unexpected behavior. Only change this if you know what you're doing.</div>
-                              `
-                            : ''
-                    }
+                    <div class="field-help">Choose one source. Both streams are intentionally disabled to prevent mixed transcripts.</div>
                     <div class="form-group">
                         <label class="form-label">Image Quality</label>
                         <select class="control" .value=${this.selectedImageQuality} @change=${this.handleImageQualitySelect}>

@@ -230,13 +230,13 @@ function getAvailableProfiles(userProfiles = []) {
     return JSON.parse(JSON.stringify([...builtInProfiles, ...normalizeUserProfiles(userProfiles)]));
 }
 
-function getSystemPrompt(profile, customPrompt = '', googleSearchEnabled = true, userProfiles = []) {
-    if (profile && typeof profile === 'object') return compileProfile(profile, googleSearchEnabled);
+function getSystemPrompt(profile, customPrompt = '', googleSearchEnabled = true, userProfiles = [], language = 'en-US') {
+    if (profile && typeof profile === 'object') return compileProfile(profile, { language });
 
     const selected = getAvailableProfiles(userProfiles).find(candidate => candidate.id === profile);
     if (selected) {
         if (customPrompt && !selected.prompt.userContext) selected.prompt.userContext = customPrompt;
-        return compileProfile(selected, googleSearchEnabled);
+        return compileProfile(selected, { language });
     }
 
     const promptParts = profilePrompts[profile] || profilePrompts.interview;
