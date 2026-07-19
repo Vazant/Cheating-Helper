@@ -46,10 +46,24 @@ try {
     const updated = storage.updateAiProfile(copy.id, { prompt: { userContext: 'Profile A facts' } });
     assert.strictEqual(updated.profile.prompt.userContext, 'Profile A facts');
     assert.strictEqual(storage.getAiProfile('interview').prompt.userContext, '');
-    const imported = storage.importAiProfile(JSON.stringify({ name: 'Imported', prompt: { userContext: 'B', length: 'detailed' }, models: { text: 'ignored' } }));
+    const imported = storage.importAiProfile(
+        JSON.stringify({ name: 'Imported', prompt: { userContext: 'B', length: 'detailed' }, models: { text: 'ignored' } })
+    );
     assert.strictEqual(imported.prompt.userContext, 'B');
     assert.strictEqual(imported.models, undefined);
     assert.strictEqual(storage.deleteAiProfile(copy.id), storage.getPreferences().selectedProfile);
+
+    storage.saveSession('1234567890', {
+        profile: 'profile_senior_java_interview',
+        profileName: 'Senior Java Interview',
+        language: 'en-US',
+    });
+    const savedSession = storage.getSession('1234567890');
+    assert.strictEqual(savedSession.profileName, 'Senior Java Interview');
+    assert.strictEqual(savedSession.language, 'en-US');
+    const sessionSummary = storage.getAllSessions().find(session => session.sessionId === '1234567890');
+    assert.strictEqual(sessionSummary.profileName, 'Senior Java Interview');
+    assert.strictEqual(sessionSummary.language, 'en-US');
 } finally {
     fs.rmSync(tempHome, { recursive: true, force: true });
 }

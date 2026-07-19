@@ -27,14 +27,14 @@
 
 Присланный `pasted-text.txt` используется только как визуальный и структурный референс экрана `AI Configuration`: компоновка, вкладки, карточки, ширина, вертикальная иерархия и размеры полей. Тексты prompt из него не являются шаблоном для копирования. Полный HTML также позволяет измерить фактические объёмы заполненных полей:
 
-| Поле референса | Заполнено символов |
-|---|---:|
-| System Prompt (User Context) | 1 226 |
-| Intro Instruction | 1 176 |
-| Context Instruction | 1 757 |
-| Search Focus | 315 |
-| Length instruction | 669 |
-| Format instruction | 488 |
+| Поле референса               | Заполнено символов |
+| ---------------------------- | -----------------: |
+| System Prompt (User Context) |              1 226 |
+| Intro Instruction            |              1 176 |
+| Context Instruction          |              1 757 |
+| Search Focus                 |                315 |
+| Length instruction           |                669 |
+| Format instruction           |                488 |
 
 Это полезный benchmark, но не доказательство максимальных ограничений: HTML не содержит `maxlength`, а числа показывают только длину текущих значений. При этом они хорошо укладываются в рекомендуемые soft limits этой задачи.
 
@@ -61,14 +61,14 @@
 
 Soft limit показывает предупреждение, но не удаляет данные. Hard limit блокирует сохранение профиля как валидного, импорт и запуск hosted-запроса до исправления. Существующий oversized-текст остаётся доступен для редактирования и экспорта.
 
-| Поле | Рекомендуется до | Абсолютный максимум | Назначение |
-|---|---:|---:|---|
-| Name | 60 | 120 | Только UI; не включается в prompt |
-| Description | 240 | 500 | Только UI; не включается в prompt |
-| About you | 4 500 | 7 000 | Проверенные факты, опыт, проекты и ограничения |
-| Assistant role | 1 200 | 2 500 | Роль, ситуация и желаемый результат |
-| Answer instructions | 2 000 | 4 000 | Что раскрывать и как работать с неопределённостью |
-| Response style | 600 | 1 200 | Только тон и голос ответа |
+| Поле                | Рекомендуется до | Абсолютный максимум | Назначение                                        |
+| ------------------- | ---------------: | ------------------: | ------------------------------------------------- |
+| Name                |               60 |                 120 | Только UI; не включается в prompt                 |
+| Description         |              240 |                 500 | Только UI; не включается в prompt                 |
+| About you           |            4 500 |               7 000 | Проверенные факты, опыт, проекты и ограничения    |
+| Assistant role      |            1 200 |               2 500 | Роль, ситуация и желаемый результат               |
+| Answer instructions |            2 000 |               4 000 | Что раскрывать и как работать с неопределённостью |
+| Response style      |              600 |               1 200 | Только тон и голос ответа                         |
 
 Индивидуальные максимумы не являются суммируемой квотой. Дополнительно проверяется итоговый compiled prompt:
 
@@ -154,7 +154,7 @@ Compiler добавляет одну общую инструкцию:
 8. `DONE` Реализовать общий Groq request budget: динамический completion до `2 048`, history trim полными парами и блокировку ниже `1 024` completion.
 9. `IN_PROGRESS` Возвращать resolved profile snapshot при старте и показывать реальный активный профиль в live UI. Имя frozen-профиля уже отображается; безопасные size/hash metadata ещё не добавлены.
 10. `DONE` Унифицировать Groq/Local session metadata.
-11. `TODO` Добавить dependency-free unit/regression tests для принудительного configured language и провести ручной Groq smoke.
+11. `IN_PROGRESS` Dependency-free unit/regression tests для принудительного configured language готовы; ручной Groq smoke новой сборки ожидает.
 
 ## Критерии приёмки
 
@@ -178,3 +178,42 @@ Compiler добавляет одну общую инструкцию:
 3. Решено: `Speech Language` — единственный источник output language; language detection по вопросу отсутствует.
 4. Утвердить English для compiler-owned instructions при сохранении любого языка в пользовательских полях.
 5. Решить, нужно ли один раз автоматически переводить уже сохранённые custom profiles с русского на английский, либо переводить только наши built-in prompts, оставив пользовательские данные без изменений.
+
+## Результат первого ручного microphone smoke
+
+Наблюдения пользователя:
+
+- при видимом `Speech Language = English (US)` фраза `nice to meet you` получила русский ответ;
+- AI Customization показывал `Job Interview`, а active session и History — `profile_senior_java_interview` / `Senior Java Interview`;
+- History отображает технический profile ID с подчёркиваниями вместо имени.
+
+Фактические причины:
+
+- сохранённое значение `preferences.json` на момент диагностики — `selectedLanguage: ru-RU`; Groq корректно заморозил именно его при Start, поэтому русский ответ не является language detection по вопросу;
+- renderer запускает Groq только с profile ID, а main process повторно читает язык из storage; видимое состояние UI и фактический snapshot могут разойтись при несохранённом/позднем изменении;
+- History session сохраняет только `profile` ID; `HistoryView.getProfileNames()` знает лишь старые built-in IDs и поэтому показывает custom ID как текст;
+- active session должна оставаться frozen, а AI Customization отражает профиль следующей сессии; сейчас UI не объясняет эту разницу.
+
+План после подтверждения:
+
+12. `DONE` Передавать выбранный UI language в `initializeGroq` и замораживать его вместе с profile snapshot; storage остаётся persistence, но не может незаметно переопределить видимое значение при Start.
+13. `DONE` Возвращать из Groq start `{ profile: { id, name }, language, promptCharacters }` и показывать `Active profile`/`Answer language` отдельно от настроек следующей сессии.
+14. `DONE` Сохранять в History безопасные `profileName` и `language`; отображать имя snapshot, оставляя ID только fallback для старых записей.
+15. `DONE` Подписать выбор AI Customization как профиль следующей сессии и добавить пояснение `Changes apply after a new Start`.
+16. `DONE` Добавить проверки `English UI → English frozen prompt`, custom profile ID/name history mapping и рассинхронизации active/next profile.
+
+Критерии дополнительной приёмки:
+
+- Start использует ровно язык, видимый пользователю в момент нажатия.
+- `English (US)` компилирует `Always reply in English` и передаёт Whisper hint `en`.
+- Live bar показывает snapshot активной сессии; изменение AI Customization не переименовывает уже активную сессию.
+- Новые записи History показывают `Senior Java Interview`, а не `profile_senior_java_interview`.
+- Старые записи без `profileName` продолжают открываться.
+
+Результат проверки реализации:
+
+- `node test/groq.test.js`, `audio.test.js`, `profile.test.js`, `storage.test.js`, `vision.test.js` — PASS.
+- `node --check` всех изменённых runtime/UI файлов — PASS.
+- `git diff --check` — PASS.
+- Фактическое сохранённое значение `selectedLanguage` исправлено на подтверждённое `en-US`; profile `interview`, audio `mic_only`, provider `byok` и три Groq keys сохранены без изменения.
+- Ручная проверка новой packaged-сборки остаётся обязательной перед переводом всей задачи `016` в `DONE`, поскольку пункты 1–6 по limits/counters всё ещё не реализованы.

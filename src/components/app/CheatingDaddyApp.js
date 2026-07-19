@@ -370,6 +370,7 @@ export class CheatingDaddyApp extends LitElement {
         sessionActive: { type: Boolean },
         selectedProfile: { type: String },
         activeProfileName: { type: String },
+        activeLanguageName: { type: String },
         selectedLanguage: { type: String },
         responses: { type: Array },
         currentResponseIndex: { type: Number },
@@ -394,6 +395,7 @@ export class CheatingDaddyApp extends LitElement {
         this.sessionActive = false;
         this.selectedProfile = 'interview';
         this.activeProfileName = '';
+        this.activeLanguageName = '';
         this.selectedLanguage = 'en-US';
         this.selectedScreenshotInterval = '5';
         this.selectedImageQuality = 'medium';
@@ -561,6 +563,7 @@ export class CheatingDaddyApp extends LitElement {
             }
             this.sessionActive = false;
             this.activeProfileName = '';
+            this.activeLanguageName = '';
             this._stopTimer();
             this.currentView = 'main';
         } else {
@@ -612,7 +615,7 @@ export class CheatingDaddyApp extends LitElement {
             }
             sessionInfo = { profile: { name: this.selectedProfile } };
         } else if (providerMode === 'local') {
-            sessionInfo = await cheatingDaddy.initializeLocal(this.selectedProfile);
+            sessionInfo = await cheatingDaddy.initializeLocal(this.selectedProfile, this.selectedLanguage);
             if (!sessionInfo) {
                 const mainView = this.shadowRoot.querySelector('main-view');
                 if (mainView && mainView.triggerApiKeyError) {
@@ -630,7 +633,7 @@ export class CheatingDaddyApp extends LitElement {
                 return;
             }
 
-            sessionInfo = await cheatingDaddy.initializeGroq(this.selectedProfile);
+            sessionInfo = await cheatingDaddy.initializeGroq(this.selectedProfile, this.selectedLanguage);
             if (!sessionInfo) return;
         }
 
@@ -645,6 +648,7 @@ export class CheatingDaddyApp extends LitElement {
         this.responses = [];
         this.currentResponseIndex = -1;
         this.activeProfileName = sessionInfo?.profile?.name || this.selectedProfile;
+        this.activeLanguageName = sessionInfo?.language?.name || this.selectedLanguage;
         this.startTime = Date.now();
         this.sessionActive = true;
         this.currentView = 'assistant';
@@ -952,7 +956,9 @@ export class CheatingDaddyApp extends LitElement {
                         </svg>
                     </button>
                 </div>
-                <div class="live-bar-center">${this.activeProfileName || profileLabels[this.selectedProfile] || 'Session'}</div>
+                <div class="live-bar-center">
+                    Active: ${this.activeProfileName || profileLabels[this.selectedProfile] || 'Session'} · ${this.activeLanguageName}
+                </div>
                 <div class="live-bar-right">
                     ${this.statusText ? html`<span class="live-bar-text">${this.statusText}</span>` : ''}
                     <span class="live-bar-text">${this.getElapsedTime()}</span>

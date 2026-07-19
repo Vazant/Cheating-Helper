@@ -33,7 +33,7 @@ assert.strictEqual(wav.length, utterances[0].length + 44);
 
 const rendererSource = fs.readFileSync(require.resolve('../src/utils/renderer'), 'utf8');
 assert.ok(rendererSource.includes("preferencesCache.audioMode === 'mic_only' ? 'mic_only' : 'speaker_only'"));
-assert.ok(rendererSource.includes("audio: captureAudio && audioMode === 'speaker_only'"));
+assert.ok(/audio:\s*captureAudio && audioMode === 'speaker_only'/.test(rendererSource));
 assert.ok(rendererSource.includes("captureAudio && audioMode === 'mic_only'"));
 assert.ok(rendererSource.includes('micStream.getTracks().forEach(track => track.stop())'));
 

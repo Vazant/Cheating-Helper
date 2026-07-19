@@ -57,13 +57,13 @@
 
 ## Карта ролей моделей
 
-| Stage | Default | Input → output | Примечание |
-|---|---|---|---|
-| Hosted STT | `whisper-large-v3-turbo` | Audio file → text | Multilingual, быстрый; multipart file request |
-| Hosted answer | `openai/gpt-oss-120b` | Text → streamed text | `reasoning_effort: low`; raw audio запрещён |
-| Hosted answer fallback | `openai/gpt-oss-20b` | Text → streamed text | Только существующая model fallback policy |
-| Local STT | выбранный Xenova Whisper | PCM → text | Отдельный Local stage |
-| Local answer | выбранная Ollama model | Text → text | Groq keys не используются |
+| Stage                  | Default                  | Input → output       | Примечание                                    |
+| ---------------------- | ------------------------ | -------------------- | --------------------------------------------- |
+| Hosted STT             | `whisper-large-v3-turbo` | Audio file → text    | Multilingual, быстрый; multipart file request |
+| Hosted answer          | `openai/gpt-oss-120b`    | Text → streamed text | `reasoning_effort: low`; raw audio запрещён   |
+| Hosted answer fallback | `openai/gpt-oss-20b`     | Text → streamed text | Только существующая model fallback policy     |
+| Local STT              | выбранный Xenova Whisper | PCM → text           | Отдельный Local stage                         |
+| Local answer           | выбранная Ollama model   | Text → text          | Groq keys не используются                     |
 
 ## Целевая архитектура
 
@@ -179,9 +179,18 @@ Latency policy:
 - `node test/audio.test.js`, `groq.test.js`, `profile.test.js`, `storage.test.js`, `vision.test.js` — PASS.
 - `node --check` изменённых runtime-файлов и `git diff --check` — PASS.
 - Forge make штатно завершился с кодом `0`; packaged ASAR содержит новый runtime.
-- Installer: `out/make/squirrel.windows/x64/Cheating Daddy-0.7.0 Setup.exe`, 226 006 528 bytes.
-- SHA-256: `57485C5218362628B847AF21460393060357322844C5988C3485F72BE8D05C85`.
+- Installer: `out/make/squirrel.windows/x64/Cheating Daddy-0.7.0 Setup.exe`, 226 010 624 bytes.
+- SHA-256: `296AEAF28E4F64067906FA787BA54ECAC04399658544C7FBB37A9EBF388A3111`.
 - Automated tests и package/make не являются окончательным подтверждением Windows audio; ручной system/microphone + live Groq smoke обязателен.
+
+## Обнаруженная регрессия ручного microphone smoke
+
+- `IN_PROGRESS` Пользователь подтвердил, что microphone capture, Hosted STT и text response фактически работают, но после готового ответа появляется `Audio processing failed: selectedProfile is not defined`.
+- Причина: успешная ветка `sendToGroq()` в `src/utils/gemini.js` ошибочно обращается к локальной переменной `selectedProfile`, доступной только в IPC-обработчике `initialize-groq`.
+- Минимальный план: вернуть из `sendToGroq()` обычный success boolean; безопасный profile snapshot возвращать из `initialize-groq`, где переменная определена.
+- Проверка: regression assertion на отсутствие обращения к `selectedProfile` в `sendToGroq`, существующие audio/Groq tests, `node --check`, затем ручной microphone smoke без ложной ошибки после ответа.
+- `DONE` Кодовая регрессия исправлена: `sendToGroq()` снова возвращает success boolean, а profile metadata возвращается из `initialize-groq`; Groq/audio/profile tests и `node --check` прошли. Ручной повторный smoke ожидает новой сборки.
+- Language/profile/history расхождения вынесены в расширенный план task `016`; application code для них ожидает подтверждения пользователя.
 
 ## Официальные источники
 

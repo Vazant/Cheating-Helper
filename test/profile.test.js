@@ -1,12 +1,6 @@
 const assert = require('assert');
 const fs = require('fs');
-const {
-    SENIOR_JAVA_PROFILE,
-    compileProfile,
-    createBuiltInProfiles,
-    importProfile,
-    normalizeProfile,
-} = require('../src/utils/aiProfiles');
+const { SENIOR_JAVA_PROFILE, compileProfile, createBuiltInProfiles, importProfile, normalizeProfile } = require('../src/utils/aiProfiles');
 const { profilePrompts } = require('../src/utils/prompts');
 
 const minimal = normalizeProfile({ name: ' Minimal ', prompt: {} }, { strict: true, id: 'user:test' });
@@ -72,8 +66,16 @@ const portable = JSON.stringify({ schemaVersion: 2, type: 'cheating-helper-profi
 assert.strictEqual(importProfile(portable).name, 'Round trip');
 
 const uiSource = fs.readFileSync(require.resolve('../src/components/views/AICustomizeView'), 'utf8');
-for (const removed of ['Expertise / Coverage', 'Length Override', 'Format Override', 'Search Policy', '>Advanced<']) assert.ok(!uiSource.includes(removed));
-for (const visible of ['About you / Facts the assistant may use', 'Assistant role', 'Answer instructions', 'What will be sent to the AI']) assert.ok(uiSource.includes(visible));
+for (const removed of ['Expertise / Coverage', 'Length Override', 'Format Override', 'Search Policy', '>Advanced<'])
+    assert.ok(!uiSource.includes(removed));
+for (const visible of ['About you / Facts the assistant may use', 'Assistant role', 'Answer instructions', 'What will be sent to the AI'])
+    assert.ok(uiSource.includes(visible));
 assert.ok(uiSource.includes('flex-direction: column'));
+assert.ok(uiSource.includes('Profile for next session'));
+assert.ok(uiSource.includes('Changes apply after a new Start'));
+
+const historySource = fs.readFileSync(require.resolve('../src/components/views/HistoryView'), 'utf8');
+assert.ok(historySource.includes('if (session.profileName) return session.profileName'));
+assert.ok(historySource.includes("profile_senior_java_interview: 'Senior Java Interview'"));
 
 console.log('AI profile schema, import and compiler: OK');

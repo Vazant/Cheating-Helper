@@ -187,19 +187,19 @@ async function initializeGemini(profile = 'interview', language = 'en-US') {
     }
 }
 
-async function initializeGroq(profile = 'interview') {
-    const result = await ipcRenderer.invoke('initialize-groq', profile);
+async function initializeGroq(profile = 'interview', language = 'en-US') {
+    const result = await ipcRenderer.invoke('initialize-groq', profile, language);
     const success = result === true || result?.success === true;
     cheatingDaddy.setStatus(success ? 'Groq text mode' : 'error');
     return success ? result : false;
 }
 
-async function initializeLocal(profile = 'interview') {
+async function initializeLocal(profile = 'interview', language = 'en-US') {
     const prefs = await storage.getPreferences();
     const ollamaHost = prefs.ollamaHost || 'http://127.0.0.1:11434';
     const ollamaModel = prefs.ollamaModel || 'llama3.1';
     const whisperModel = prefs.whisperModel || 'Xenova/whisper-small';
-    const result = await ipcRenderer.invoke('initialize-local', ollamaHost, ollamaModel, whisperModel, profile, '', prefs.selectedLanguage || 'en-US');
+    const result = await ipcRenderer.invoke('initialize-local', ollamaHost, ollamaModel, whisperModel, profile, '', language);
     const success = result === true || result?.success === true;
     if (success) {
         cheatingDaddy.setStatus('Local AI Live');
@@ -294,15 +294,16 @@ async function startCapture(screenshotIntervalSeconds = 5, imageQuality = 'mediu
                         width: { ideal: 1920 },
                         height: { ideal: 1080 },
                     },
-                    audio: captureAudio && audioMode === 'speaker_only'
-                        ? {
-                              sampleRate: SAMPLE_RATE,
-                              channelCount: 1,
-                              echoCancellation: false,
-                              noiseSuppression: false,
-                              autoGainControl: false,
-                          }
-                        : false,
+                    audio:
+                        captureAudio && audioMode === 'speaker_only'
+                            ? {
+                                  sampleRate: SAMPLE_RATE,
+                                  channelCount: 1,
+                                  echoCancellation: false,
+                                  noiseSuppression: false,
+                                  autoGainControl: false,
+                              }
+                            : false,
                 });
 
                 console.log('Linux system audio capture via getDisplayMedia succeeded');
@@ -356,15 +357,16 @@ async function startCapture(screenshotIntervalSeconds = 5, imageQuality = 'mediu
                     width: { ideal: 1920 },
                     height: { ideal: 1080 },
                 },
-                audio: captureAudio && audioMode === 'speaker_only'
-                    ? {
-                          sampleRate: SAMPLE_RATE,
-                          channelCount: 1,
-                          echoCancellation: true,
-                          noiseSuppression: true,
-                          autoGainControl: true,
-                      }
-                    : false,
+                audio:
+                    captureAudio && audioMode === 'speaker_only'
+                        ? {
+                              sampleRate: SAMPLE_RATE,
+                              channelCount: 1,
+                              echoCancellation: true,
+                              noiseSuppression: true,
+                              autoGainControl: true,
+                          }
+                        : false,
             });
 
             console.log('Windows capture started with loopback audio');
@@ -794,6 +796,8 @@ ipcRenderer.on('save-session-context', async (event, data) => {
     try {
         await storage.saveSession(data.sessionId, {
             profile: data.profile,
+            profileName: data.profileName,
+            language: data.language,
             customPrompt: data.customPrompt,
         });
         console.log('Session context saved:', data.sessionId, 'profile:', data.profile);

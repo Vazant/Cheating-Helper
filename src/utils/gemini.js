@@ -3,7 +3,15 @@ const { BrowserWindow, ipcMain } = require('electron');
 const { spawn } = require('child_process');
 const { saveDebugAudio } = require('../audioUtils');
 const { getSystemPrompt } = require('./prompts');
-const { getAvailableModel, incrementLimitCount, getApiKey, getGroqApiKeySequence, activateGroqApiKey, getPreferences, getAiProfile } = require('../storage');
+const {
+    getAvailableModel,
+    incrementLimitCount,
+    getApiKey,
+    getGroqApiKeySequence,
+    activateGroqApiKey,
+    getPreferences,
+    getAiProfile,
+} = require('../storage');
 const { connectCloud, sendCloudAudio, sendCloudText, sendCloudImage, closeCloud, isCloudActive, setOnTurnComplete } = require('./cloud');
 const { GROQ_VISION_MODEL, buildVisionPrompt } = require('./vision');
 const { getLanguageConfig } = require('./aiProfiles');
@@ -101,7 +109,7 @@ function buildContextMessage() {
 }
 
 // Conversation management functions
-function initializeNewSession(profile = null, customPrompt = null) {
+function initializeNewSession(profile = null, customPrompt = null, metadata = {}) {
     currentSessionId = Date.now().toString();
     currentTranscription = '';
     conversationHistory = [];
@@ -117,6 +125,8 @@ function initializeNewSession(profile = null, customPrompt = null) {
         sendToRenderer('save-session-context', {
             sessionId: currentSessionId,
             profile: profile,
+            profileName: metadata.profileName || null,
+            language: metadata.language || null,
             customPrompt: customPrompt || '',
         });
     }
@@ -613,11 +623,7 @@ async function sendToGroq(transcription) {
 
         console.log(`Groq response completed (${model})`);
         sendToRenderer('update-status', 'Listening...');
-        return {
-            success: true,
-            profile: { id: selectedProfile.id, name: selectedProfile.name },
-            promptCharacters: currentSystemPrompt.length,
-        };
+        return true;
     }
 
     removeUserTurn();
@@ -1188,12 +1194,12 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
         return false;
     });
 
-    ipcMain.handle('initialize-groq', async (event, profile = 'interview', customPrompt = '') => {
+    ipcMain.handle('initialize-groq', async (event, profile = 'interview', selectedLanguage = 'en-US') => {
         if (!getGroqApiKeySequence().length) return false;
         currentProviderMode = 'groq';
         const prefs = getPreferences();
         const selectedProfile = getAiProfileSnapshot(profile);
-        const language = getLanguageConfig(prefs.selectedLanguage);
+        const language = getLanguageConfig(selectedLanguage);
         currentSystemPrompt = getSystemPrompt(selectedProfile, '', false, [], language.locale);
         currentGroqSession = {
             profileId: selectedProfile.id,
@@ -1205,18 +1211,24 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
             tpmLimit: null,
         };
         configureHostedAudio(prefs.audioMode);
-        initializeNewSession(profile, currentSystemPrompt);
+        initializeNewSession(selectedProfile.id, currentSystemPrompt, { profileName: selectedProfile.name, language: language.locale });
         sessionParams = null;
         geminiSessionRef.current = null;
-        return true;
+        return {
+            success: true,
+            profile: { id: selectedProfile.id, name: selectedProfile.name },
+            language: { locale: language.locale, name: language.name },
+            promptCharacters: currentSystemPrompt.length,
+        };
     });
 
     ipcMain.handle('initialize-local', async (event, ollamaHost, ollamaModel, whisperModel, profile, customPrompt, language = 'en-US') => {
         currentProviderMode = 'local';
         currentGroqSession = null;
         const selectedProfile = getAiProfileSnapshot(profile);
-        currentSystemPrompt = getSystemPrompt(selectedProfile, '', false, [], language);
-        const success = await getLocalAi().initializeLocalSession(ollamaHost, ollamaModel, whisperModel, selectedProfile, '', language);
+        const languageConfig = getLanguageConfig(language);
+        currentSystemPrompt = getSystemPrompt(selectedProfile, '', false, [], languageConfig.locale);
+        const success = await getLocalAi().initializeLocalSession(ollamaHost, ollamaModel, whisperModel, selectedProfile, '', languageConfig.locale);
         if (!success) {
             currentProviderMode = 'groq';
         }
@@ -1224,6 +1236,7 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
             ? {
                   success: true,
                   profile: { id: selectedProfile.id, name: selectedProfile.name },
+                  language: { locale: languageConfig.locale, name: languageConfig.name },
                   promptCharacters: currentSystemPrompt.length,
               }
             : false;

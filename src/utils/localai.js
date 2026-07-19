@@ -308,7 +308,7 @@ async function initializeLocalSession(ollamaHost, model, whisperModel, profile, 
         localConversationHistory = [];
 
         // Initialize conversation session
-        initializeNewSession(profile, customPrompt);
+        initializeNewSession(profile.id, customPrompt, { profileName: profile.name, language: languageConfig.locale });
 
         isLocalActive = true;
         sendToRenderer('session-initializing', false);

@@ -406,13 +406,16 @@ function updateAiProfile(id, patch) {
         profile = createAiProfile(id, `${profile.name} — My Profile`);
         return { ...updateAiProfile(profile.id, patch), createdCopy: true };
     }
-    const merged = normalizeProfile({
-        ...profile,
-        ...patch,
-        id: profile.id,
-        prompt: { ...profile.prompt, ...(patch.prompt || {}) },
-        behavior: { ...profile.behavior, ...(patch.behavior || {}) },
-    }, { strict: true, id: profile.id });
+    const merged = normalizeProfile(
+        {
+            ...profile,
+            ...patch,
+            id: profile.id,
+            prompt: { ...profile.prompt, ...(patch.prompt || {}) },
+            behavior: { ...profile.behavior, ...(patch.behavior || {}) },
+        },
+        { strict: true, id: profile.id }
+    );
     index = store.userProfiles.findIndex(candidate => candidate.id === id);
     store.userProfiles[index] = merged;
     if (!setProfileStore(store)) throw new Error('Could not save profile');
@@ -433,9 +436,13 @@ function deleteAiProfile(id) {
 }
 
 function importAiProfile(jsonText) {
-    if (typeof jsonText !== 'string' || Buffer.byteLength(jsonText, 'utf8') > 256 * 1024) throw new Error('Profile JSON must be a UTF-8 file smaller than 256 KiB');
+    if (typeof jsonText !== 'string' || Buffer.byteLength(jsonText, 'utf8') > 256 * 1024)
+        throw new Error('Profile JSON must be a UTF-8 file smaller than 256 KiB');
     const store = getProfileStore();
-    const profile = importProfile(jsonText, listAiProfiles().map(item => item.id));
+    const profile = importProfile(
+        jsonText,
+        listAiProfiles().map(item => item.id)
+    );
     store.userProfiles.push(profile);
     if (!setProfileStore(store)) throw new Error('Could not save imported profile');
     return profile;
@@ -578,6 +585,8 @@ function saveSession(sessionId, data) {
         lastUpdated: Date.now(),
         // Profile context - set once when session starts
         profile: data.profile || existingSession?.profile || null,
+        profileName: data.profileName || existingSession?.profileName || null,
+        language: data.language || existingSession?.language || null,
         customPrompt: data.customPrompt || existingSession?.customPrompt || null,
         // Conversation data
         conversationHistory: data.conversationHistory || existingSession?.conversationHistory || [],
@@ -620,6 +629,8 @@ function getAllSessions() {
                         messageCount: data.conversationHistory?.length || 0,
                         screenAnalysisCount: data.screenAnalysisHistory?.length || 0,
                         profile: data.profile || null,
+                        profileName: data.profileName || null,
+                        language: data.language || null,
                         customPrompt: data.customPrompt || null,
                     };
                 }

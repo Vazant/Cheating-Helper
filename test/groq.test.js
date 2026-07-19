@@ -60,10 +60,16 @@ const history = [
     { role: 'user', content: 'current question' },
 ];
 const planned = buildGroqRequestPlan('system', history, { conversationContextEnabled: true, conversationContextCount: 1 });
-assert.deepStrictEqual(planned.messages.map(message => message.content), ['system', 'recent question', 'recent answer', 'current question']);
+assert.deepStrictEqual(
+    planned.messages.map(message => message.content),
+    ['system', 'recent question', 'recent answer', 'current question']
+);
 assert.ok(planned.maxCompletionTokens <= 2048 && planned.maxCompletionTokens >= 1024);
 const noHistory = buildGroqRequestPlan('system', history, { conversationContextEnabled: false, conversationContextCount: 20 });
-assert.deepStrictEqual(noHistory.messages.map(message => message.content), ['system', 'current question']);
+assert.deepStrictEqual(
+    noHistory.messages.map(message => message.content),
+    ['system', 'current question']
+);
 assert.ok(buildGroqRequestPlan('Ж'.repeat(20000), [{ role: 'user', content: 'question' }]).error);
 
 const events = [];
@@ -84,6 +90,7 @@ assert.deepStrictEqual(readGroqSseEvent('{"choices":[{"delta":{},"finish_reason"
 assert.strictEqual(readGroqSseEvent('not-json'), null);
 
 const geminiSource = fs.readFileSync(require.resolve('../src/utils/gemini'), 'utf8');
+const sendToGroqSource = geminiSource.slice(geminiSource.indexOf('async function sendToGroq'), geminiSource.indexOf('async function sendGroqImage'));
 assert.strictEqual((geminiSource.match(/sendToGemma\(/g) || []).length, 1);
 assert.strictEqual((geminiSource.match(/sendToGroq\(/g) || []).length, 3);
 assert.ok(geminiSource.includes('Groq API key required for text responses'));
@@ -94,6 +101,14 @@ assert.ok(geminiSource.includes('include_reasoning: false'));
 assert.ok(geminiSource.includes('max_completion_tokens: requestPlan.maxCompletionTokens'));
 assert.ok(geminiSource.includes('activateGroqApiKey(groqApiKey)'));
 assert.ok(geminiSource.includes("finishReason === 'length'"));
+assert.ok(!sendToGroqSource.includes('selectedProfile'));
+assert.ok(geminiSource.includes('profile: { id: selectedProfile.id, name: selectedProfile.name }'));
+assert.ok(geminiSource.includes("profile = 'interview', selectedLanguage = 'en-US'"));
+assert.ok(geminiSource.includes('const language = getLanguageConfig(selectedLanguage)'));
+
+const rendererSource = fs.readFileSync(require.resolve('../src/utils/renderer'), 'utf8');
+assert.ok(rendererSource.includes("initializeGroq(profile = 'interview', language = 'en-US')"));
+assert.ok(rendererSource.includes("ipcRenderer.invoke('initialize-groq', profile, language)"));
 
 const { getSystemPrompt } = require('../src/utils/prompts');
 const systemPrompt = getSystemPrompt('interview', '', false);
@@ -110,6 +125,8 @@ assert.ok(mainViewSource.includes('Choose Groq or Ollama screenshot analysis in 
 const appSource = fs.readFileSync(require.resolve('../src/components/app/CheatingDaddyApp'), 'utf8');
 assert.ok(appSource.includes('initializeGroq'));
 assert.ok(!appSource.includes('initializeGemini('));
+assert.ok(appSource.includes('initializeGroq(this.selectedProfile, this.selectedLanguage)'));
+assert.ok(appSource.includes('Active: ${this.activeProfileName'));
 
 const { normalizeGroqApiKeys, normalizeGroqApiKeyIndex, orderGroqApiKeys } = require('../src/storage');
 assert.deepStrictEqual(normalizeGroqApiKeys(undefined, ' legacy-key '), ['legacy-key']);
