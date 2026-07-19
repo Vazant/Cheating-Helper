@@ -39,11 +39,14 @@ function isNearRateLimit(metric) {
     return usedRatio !== null && usedRatio >= 0.95;
 }
 
-function getGroqFallbackDecision(status, hasNext, rateLimitFallbackUsed, isRateLimitFallbackAttempt) {
-    if (!hasNext || isRateLimitFallbackAttempt) return null;
+function getGroqFallbackDecision(status, hasNext) {
+    if (!hasNext) return null;
     if (status === 404) return 'not-found';
-    if (status === 429 && !rateLimitFallbackUsed) return 'rate-limit';
     return null;
+}
+
+function getNextGroqKeyIndex(status, currentIndex, keyCount) {
+    return status === 429 && currentIndex + 1 < keyCount ? currentIndex + 1 : null;
 }
 
 function formatGroqRateLimits(rateLimits) {
@@ -71,9 +74,10 @@ function getGroqErrorStatus(status, model, rateLimits, errorMessage) {
 }
 
 function readGroqSseEvent(data) {
-    if (data === '[DONE]') return { done: true, content: '' };
+    if (data === '[DONE]') return { done: true, content: '', finishReason: null };
     try {
-        return { done: false, content: JSON.parse(data).choices?.[0]?.delta?.content || '' };
+        const choice = JSON.parse(data).choices?.[0];
+        return { done: false, content: choice?.delta?.content || '', finishReason: choice?.finish_reason || null };
     } catch {
         return null;
     }
@@ -108,6 +112,7 @@ module.exports = {
     getUsedRatio,
     isNearRateLimit,
     getGroqFallbackDecision,
+    getNextGroqKeyIndex,
     formatGroqRateLimits,
     getGroqErrorStatus,
     readGroqSseEvent,

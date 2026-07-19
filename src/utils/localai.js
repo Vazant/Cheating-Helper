@@ -1,6 +1,7 @@
 const { Ollama } = require('ollama');
 const { getSystemPrompt } = require('./prompts');
 const { sendToRenderer, initializeNewSession, saveConversationTurn } = require('./gemini');
+const { hasVisionCapability } = require('./vision');
 
 // ── State ──
 
@@ -224,10 +225,7 @@ async function sendToOllama(transcription) {
     }
 
     try {
-        const messages = [
-            { role: 'system', content: currentSystemPrompt || 'You are a helpful assistant.' },
-            ...localConversationHistory,
-        ];
+        const messages = [{ role: 'system', content: currentSystemPrompt || 'You are a helpful assistant.' }, ...localConversationHistory];
 
         const response = await ollamaClient.chat({
             model: ollamaModel,
@@ -366,13 +364,31 @@ async function sendLocalText(text) {
     }
 }
 
-async function sendLocalImage(base64Data, prompt) {
-    if (!isLocalActive || !ollamaClient) {
-        return { success: false, error: 'No active local session' };
+async function listLocalVisionModels(ollamaHost) {
+    const client = new Ollama({ host: ollamaHost });
+    const listed = await client.list();
+    const models = [];
+    for (const item of listed.models || []) {
+        try {
+            const info = await client.show({ model: item.model || item.name });
+            if (hasVisionCapability(info)) models.push(item.model || item.name);
+        } catch (error) {
+            console.warn(`[LocalAI] Could not inspect ${item.model || item.name}: ${error.message}`);
+        }
     }
+    return models;
+}
+
+async function sendLocalImage(base64Data, prompt, { host, model, systemPrompt } = {}) {
+    const client = host ? new Ollama({ host }) : ollamaClient;
+    const visionModel = model || ollamaModel;
+    if (!client || !visionModel) return { success: false, error: 'Local Vision is not configured' };
 
     try {
-        console.log('[LocalAI] Sending image to Ollama');
+        const info = await client.show({ model: visionModel });
+        if (!hasVisionCapability(info)) return { success: false, error: `${visionModel} does not support images` };
+
+        console.log(`[LocalAI] Sending image to Ollama (${visionModel})`);
         sendToRenderer('update-status', 'Analyzing image...');
 
         const userMessage = {
@@ -381,21 +397,10 @@ async function sendLocalImage(base64Data, prompt) {
             images: [base64Data],
         };
 
-        // Store text-only version in history
-        localConversationHistory.push({ role: 'user', content: prompt });
+        const messages = [{ role: 'system', content: systemPrompt || currentSystemPrompt || 'You are a helpful assistant.' }, userMessage];
 
-        if (localConversationHistory.length > 20) {
-            localConversationHistory = localConversationHistory.slice(-20);
-        }
-
-        const messages = [
-            { role: 'system', content: currentSystemPrompt || 'You are a helpful assistant.' },
-            ...localConversationHistory.slice(0, -1),
-            userMessage,
-        ];
-
-        const response = await ollamaClient.chat({
-            model: ollamaModel,
+        const response = await client.chat({
+            model: visionModel,
             messages,
             stream: true,
         });
@@ -412,14 +417,9 @@ async function sendLocalImage(base64Data, prompt) {
             }
         }
 
-        if (fullText.trim()) {
-            localConversationHistory.push({ role: 'assistant', content: fullText.trim() });
-            saveConversationTurn(prompt, fullText);
-        }
-
         console.log('[LocalAI] Image response completed');
         sendToRenderer('update-status', 'Listening...');
-        return { success: true, text: fullText, model: ollamaModel };
+        return { success: true, text: fullText, model: visionModel };
     } catch (error) {
         console.error('[LocalAI] Image error:', error);
         sendToRenderer('update-status', 'Ollama error: ' + error.message);
@@ -434,4 +434,5 @@ module.exports = {
     isLocalSessionActive,
     sendLocalText,
     sendLocalImage,
+    listLocalVisionModels,
 };

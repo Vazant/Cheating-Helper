@@ -1,6 +1,6 @@
 ---
 name: cheating-helper-planner
-description: Analyze and plan Cheating Helper changes involving AI providers, model roles, model selection settings, Groq quotas, rate-limit handling, streaming, transcription, vision, or local AI. Use before implementing any change that adds, removes, replaces, or reassigns a model or changes provider preferences and fallback behavior.
+description: Analyze and plan Cheating Helper changes involving AI providers, model roles, model selection settings, Groq quotas, rate-limit handling, prompt/session context, latency, streaming, audio capture, transcription, vision, or local AI. Use before implementing any change in those flows or changing provider preferences and fallback behavior.
 ---
 
 # Cheating Helper Planner
@@ -18,12 +18,16 @@ Plan before editing application code.
 7. Inspect related upstream issues and PRs before proposing new code.
 8. Break the change into the smallest independently verifiable tasks. Record files, acceptance criteria, checks, and fallback behavior.
 9. Ask the user to resolve any model, default, fallback, or UI ambiguity before implementation.
+10. For prompt/session changes, trace profile selection through compilation, session snapshot, every provider request, history and UI streaming. Never assume a stateless provider remembers a system prompt.
+11. For audio changes, trace each source independently through capture, PCM format, resampling, VAD, transcription, response routing, cleanup and restart. Never mix simultaneous sources in shared segmentation state.
 
 ## Agent Routing
 
 - Delegate model-flow tracing to `model-architecture`.
 - Delegate current Groq models and limit semantics to `groq-limits`.
 - Delegate settings persistence and minimal checks to `settings-quality`.
+- Delegate profile compilation, session context, history budget and latency tracing to `prompt-runtime`.
+- Delegate microphone/system capture, PCM/VAD/STT routing and cleanup tracing to `audio-pipeline`.
 - Keep code edits and final decisions with the main agent after user approval.
 
 ## Required Output

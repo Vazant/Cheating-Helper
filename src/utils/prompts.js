@@ -1,3 +1,5 @@
+const { SENIOR_JAVA_PROFILE, compileProfile, createBuiltInProfiles, normalizeUserProfiles } = require('./aiProfiles');
+
 const profilePrompts = {
     interview: {
         intro: `You are an AI-powered interview assistant, designed to act as a discreet on-screen teleprompter. Your mission is to help the user excel in their job interview by providing concise, impactful, and ready-to-speak answers or key talking points. Analyze the ongoing interview dialogue and, crucially, the 'User-provided context' below.`,
@@ -209,17 +211,42 @@ function buildSystemPrompt(promptParts, customPrompt = '', googleSearchEnabled =
         sections.push('\n\n', promptParts.searchUsage);
     }
 
-    sections.push('\n\n', promptParts.content, '\n\nUser-provided context\n-----\n', customPrompt, '\n-----\n\n', promptParts.outputInstructions);
+    sections.push(
+        '\n\n',
+        promptParts.content,
+        '\n\nUser-provided context\n-----\n',
+        customPrompt,
+        '\n-----\n\n',
+        promptParts.outputInstructions,
+        '\n\nFINAL FORMAT OVERRIDE:\nUse plain readable text. Do not bold ordinary words or wrap every word in Markdown. Use Markdown only for a real list or code block. Always finish the final sentence.'
+    );
 
     return sections.join('');
 }
 
-function getSystemPrompt(profile, customPrompt = '', googleSearchEnabled = true) {
+const builtInProfiles = createBuiltInProfiles(profilePrompts);
+
+function getAvailableProfiles(userProfiles = []) {
+    return JSON.parse(JSON.stringify([...builtInProfiles, ...normalizeUserProfiles(userProfiles)]));
+}
+
+function getSystemPrompt(profile, customPrompt = '', googleSearchEnabled = true, userProfiles = []) {
+    if (profile && typeof profile === 'object') return compileProfile(profile, googleSearchEnabled);
+
+    const selected = getAvailableProfiles(userProfiles).find(candidate => candidate.id === profile);
+    if (selected) {
+        if (customPrompt && !selected.prompt.userContext) selected.prompt.userContext = customPrompt;
+        return compileProfile(selected, googleSearchEnabled);
+    }
+
     const promptParts = profilePrompts[profile] || profilePrompts.interview;
     return buildSystemPrompt(promptParts, customPrompt, googleSearchEnabled);
 }
 
 module.exports = {
     profilePrompts,
+    builtInProfiles,
+    SENIOR_JAVA_PROFILE,
+    getAvailableProfiles,
     getSystemPrompt,
 };

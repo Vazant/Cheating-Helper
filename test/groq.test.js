@@ -7,16 +7,13 @@ const {
     getUsedRatio,
     isNearRateLimit,
     getGroqFallbackDecision,
+    getNextGroqKeyIndex,
     getGroqErrorStatus,
     readGroqSseEvent,
     createSseParser,
 } = require('../src/utils/groq');
 
-assert.deepStrictEqual(getGroqFallbackOrder('openai/gpt-oss-20b'), [
-    'openai/gpt-oss-20b',
-    'openai/gpt-oss-120b',
-    'qwen/qwen3.6-27b',
-]);
+assert.deepStrictEqual(getGroqFallbackOrder('openai/gpt-oss-20b'), ['openai/gpt-oss-20b', 'openai/gpt-oss-120b', 'qwen/qwen3.6-27b']);
 assert.strictEqual(getGroqFallbackOrder('retired/model')[0], DEFAULT_GROQ_MODEL);
 
 const values = new Map([
@@ -37,12 +34,12 @@ assert.strictEqual(isNearRateLimit({ limit: 10000, remaining: 500 }), true);
 assert.strictEqual(readGroqRateLimits({ get: () => 'bad' }).requests.limit, null);
 assert.strictEqual(readGroqRateLimits({ get: () => null }).requests.limit, null);
 
-assert.strictEqual(getGroqFallbackDecision(404, true, false, false), 'not-found');
-assert.strictEqual(getGroqFallbackDecision(404, false, false, false), null);
-assert.strictEqual(getGroqFallbackDecision(404, true, true, true), null);
-assert.strictEqual(getGroqFallbackDecision(429, true, false, false), 'rate-limit');
-assert.strictEqual(getGroqFallbackDecision(429, true, true, false), null);
-for (const status of [401, 403, 500, 503]) assert.strictEqual(getGroqFallbackDecision(status, true, false, false), null);
+assert.strictEqual(getGroqFallbackDecision(404, true), 'not-found');
+assert.strictEqual(getGroqFallbackDecision(404, false), null);
+for (const status of [401, 403, 429, 500, 503]) assert.strictEqual(getGroqFallbackDecision(status, true), null);
+assert.strictEqual(getNextGroqKeyIndex(429, 0, 3), 1);
+assert.strictEqual(getNextGroqKeyIndex(429, 2, 3), null);
+for (const status of [200, 401, 403, 404, 500, 503]) assert.strictEqual(getNextGroqKeyIndex(status, 0, 3), null);
 
 const status429 = getGroqErrorStatus(429, DEFAULT_GROQ_MODEL, limits, 'limited');
 for (const detail of ['RPD 50/1000 remaining', 'RPD reset 2h', 'TPM 399/8000 remaining', 'retry-after 3']) assert.ok(status429.includes(detail));
@@ -58,14 +55,48 @@ parser.push('ent":"hello"}}]}\r\n\r\ndata: [DO');
 parser.push('NE]\n');
 parser.end();
 assert.deepStrictEqual(events, ['{"choices":[{"delta":{"content":"hello"}}]}', '[DONE]']);
-assert.deepStrictEqual(readGroqSseEvent(events[0]), { done: false, content: 'hello' });
-assert.deepStrictEqual(readGroqSseEvent('[DONE]'), { done: true, content: '' });
-assert.deepStrictEqual(readGroqSseEvent('{"choices":[{"delta":{}}]}'), { done: false, content: '' });
+assert.deepStrictEqual(readGroqSseEvent(events[0]), { done: false, content: 'hello', finishReason: null });
+assert.deepStrictEqual(readGroqSseEvent('[DONE]'), { done: true, content: '', finishReason: null });
+assert.deepStrictEqual(readGroqSseEvent('{"choices":[{"delta":{}}]}'), { done: false, content: '', finishReason: null });
+assert.deepStrictEqual(readGroqSseEvent('{"choices":[{"delta":{},"finish_reason":"length"}]}'), {
+    done: false,
+    content: '',
+    finishReason: 'length',
+});
 assert.strictEqual(readGroqSseEvent('not-json'), null);
 
 const geminiSource = fs.readFileSync(require.resolve('../src/utils/gemini'), 'utf8');
 assert.strictEqual((geminiSource.match(/sendToGemma\(/g) || []).length, 1);
 assert.strictEqual((geminiSource.match(/sendToGroq\(/g) || []).length, 3);
 assert.ok(geminiSource.includes('Groq API key required for text responses'));
+assert.ok(geminiSource.includes("ipcMain.handle('initialize-gemini', async () =>"));
+assert.ok(geminiSource.includes('Gemini initialization is temporarily disabled'));
+assert.ok(geminiSource.includes("reasoning_effort: 'low'"));
+assert.ok(geminiSource.includes('include_reasoning: false'));
+assert.ok(geminiSource.includes('max_completion_tokens: 4096'));
+assert.ok(geminiSource.includes("finishReason === 'length'"));
+
+const { getSystemPrompt } = require('../src/utils/prompts');
+const systemPrompt = getSystemPrompt('interview', '', false);
+assert.ok(systemPrompt.includes('Use plain readable text'));
+assert.ok(systemPrompt.includes('Do not bold ordinary words'));
+assert.ok(systemPrompt.endsWith('Always finish the final sentence.'));
+
+const mainViewSource = fs.readFileSync(require.resolve('../src/components/views/MainView'), 'utf8');
+assert.ok(!mainViewSource.includes('Gemini API Key'));
+assert.ok(mainViewSource.includes('Add another key'));
+assert.ok(mainViewSource.includes('Choose Groq or Ollama screenshot analysis in Settings'));
+
+const appSource = fs.readFileSync(require.resolve('../src/components/app/CheatingDaddyApp'), 'utf8');
+assert.ok(appSource.includes('initializeGroq'));
+assert.ok(!appSource.includes('initializeGemini('));
+
+const { normalizeGroqApiKeys, normalizeGroqApiKeyIndex, orderGroqApiKeys } = require('../src/storage');
+assert.deepStrictEqual(normalizeGroqApiKeys(undefined, ' legacy-key '), ['legacy-key']);
+assert.deepStrictEqual(normalizeGroqApiKeys([], ' legacy-key '), ['legacy-key']);
+assert.deepStrictEqual(normalizeGroqApiKeys([' first ', '', 'first', null, 'second']), ['first', 'second']);
+assert.strictEqual(normalizeGroqApiKeyIndex(-1, 3), 0);
+assert.strictEqual(normalizeGroqApiKeyIndex(9, 3), 2);
+assert.deepStrictEqual(orderGroqApiKeys(['a', 'b', 'c'], 1), ['b', 'c', 'a']);
 
 console.log('Groq helpers: OK');
