@@ -1,6 +1,6 @@
 // renderer.js
 const { ipcRenderer } = require('electron');
-const { createSpeechCaptureGate } = require('./speechCapture');
+const { createSpeechCaptureGate } = require('./utils/speechCapture');
 
 let mediaStream = null;
 let screenshotInterval = null;
@@ -1192,8 +1192,12 @@ const cheatingDaddy = {
     isMacOS: isMacOS,
 };
 
-// Make it globally available
-window.cheatingDaddy = cheatingDaddy;
+// Publish the renderer API before deferred web-component modules run.
+Object.defineProperty(window, 'cheatingDaddy', {
+    value: cheatingDaddy,
+    configurable: false,
+    writable: false,
+});
 
 // Load theme after DOM is ready
 if (document.readyState === 'loading') {

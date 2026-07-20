@@ -28,3 +28,7 @@
 | 018 | Working Hosted Groq: keys, context, latency and voice commands | IN_PROGRESS | 011, 012, 013, 016 |
 | 019 | Speech-to-Text capture shortcut and toggle mode | PLANNING | 012, 018 |
 | 020 | EPAM HR Call profile | DONE | — |
+| 021 | Renderer storage API bootstrap | DONE | 019 |
+| 022 | Показывать исходный вопрос над ответом | TODO | 012, 018, 019, 021 |
+| 023 | Естественные и стабильные ответы EPAM HR Call | TODO | 020 |
+| 024 | Копирование текста из History | TODO — FUTURE | — |
