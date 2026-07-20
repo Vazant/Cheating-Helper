@@ -65,6 +65,16 @@ assert.ok(SENIOR_JAVA_PROFILE.prompt.answerRules.includes('Spring'));
 const portable = JSON.stringify({ schemaVersion: 2, type: 'cheating-helper-profile', profile: { name: 'Round trip', prompt: minimal.prompt } });
 assert.strictEqual(importProfile(portable).name, 'Round trip');
 
+const epamProfilePath = require.resolve('../profiles/epam-hr-call.json');
+const epamProfile = importProfile(fs.readFileSync(epamProfilePath, 'utf8'));
+const epamPrompt = compileProfile(epamProfile, { language: 'en-US' });
+assert.strictEqual(epamProfile.name, 'EPAM HR Call');
+assert.strictEqual(epamProfile.prompt.length, 'concise');
+assert.strictEqual(epamProfile.prompt.format, 'teleprompter');
+assert.ok(epamPrompt.includes('around PLN 16,000 per month'));
+assert.ok(epamPrompt.includes('renewal application is being processed'));
+assert.ok(epamPrompt.includes('Always reply in English'));
+
 const uiSource = fs.readFileSync(require.resolve('../src/components/views/AICustomizeView'), 'utf8');
 for (const removed of ['Expertise / Coverage', 'Length Override', 'Format Override', 'Search Policy', '>Advanced<'])
     assert.ok(!uiSource.includes(removed));

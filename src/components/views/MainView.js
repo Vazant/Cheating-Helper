@@ -553,6 +553,7 @@ export class MainView extends LitElement {
         this._mode = 'byok';
         this._token = '';
         this._groqKeys = [''];
+        this._keysLoaded = false;
         this._openaiKey = '';
         this._tokenError = false;
         this._keyError = false;
@@ -572,22 +573,24 @@ export class MainView extends LitElement {
 
     async _loadFromStorage() {
         try {
+            const storageApi = window.cheatingDaddy.storage;
             const [prefs, creds] = await Promise.all([
-                cheatingDaddy.storage.getPreferences(),
-                cheatingDaddy.storage.getCredentials().catch(() => ({})),
+                storageApi.getPreferences(),
+                storageApi.getCredentials().catch(() => ({})),
             ]);
 
             const storedMode = prefs.providerMode || 'byok';
             this._mode = storedMode === 'cloud' ? 'byok' : storedMode;
 
             if (storedMode === 'cloud') {
-                await cheatingDaddy.storage.updatePreference('providerMode', this._mode);
+                await storageApi.updatePreference('providerMode', this._mode);
             }
 
             // Load keys
             this._token = creds.cloudToken || '';
-            const groqKeys = await cheatingDaddy.storage.getGroqApiKeys().catch(() => []);
+            const groqKeys = await storageApi.getGroqApiKeys().catch(() => []);
             this._groqKeys = groqKeys.length ? groqKeys : [''];
+            this._keysLoaded = true;
             this._openaiKey = creds.openaiKey || '';
 
             // Load local AI settings
@@ -598,6 +601,7 @@ export class MainView extends LitElement {
             this.requestUpdate();
         } catch (e) {
             console.error('Error loading MainView storage:', e);
+            this._keysLoaded = false;
         }
     }
 
@@ -747,7 +751,11 @@ export class MainView extends LitElement {
 
     async _saveGroqKeys() {
         this._keyError = false;
-        await cheatingDaddy.storage.setGroqApiKeys(this._groqKeys);
+        const keys = (this._groqKeys || []).map(key => (typeof key === 'string' ? key.trim() : '')).filter(Boolean);
+        // Never wipe persisted keys with an empty UI state before load completes
+        if (!keys.length && !this._keysLoaded) return;
+        await window.cheatingDaddy.storage.setGroqApiKeys(this._groqKeys);
+        this._keysLoaded = true;
         this.requestUpdate();
     }
 

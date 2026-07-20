@@ -282,30 +282,17 @@ function updateGlobalShortcuts(keybinds, mainWindow, sendToRenderer, geminiSessi
         }
     }
 
-    // Register emergency erase shortcut
+    // Quit shortcut (legacy keybind name: emergencyErase) — exit only, never wipe data
     if (keybinds.emergencyErase) {
         try {
             globalShortcut.register(keybinds.emergencyErase, () => {
-                console.log('Emergency Erase triggered!');
-                if (mainWindow && !mainWindow.isDestroyed()) {
-                    mainWindow.hide();
-
-                    if (geminiSessionRef.current) {
-                        geminiSessionRef.current.close();
-                        geminiSessionRef.current = null;
-                    }
-
-                    sendToRenderer('clear-sensitive-data');
-
-                    setTimeout(() => {
-                        const { app } = require('electron');
-                        app.quit();
-                    }, 300);
-                }
+                console.log('Quit shortcut triggered');
+                const { app } = require('electron');
+                app.quit();
             });
-            console.log(`Registered emergencyErase: ${keybinds.emergencyErase}`);
+            console.log(`Registered quit shortcut: ${keybinds.emergencyErase}`);
         } catch (error) {
-            console.error(`Failed to register emergencyErase (${keybinds.emergencyErase}):`, error);
+            console.error(`Failed to register quit shortcut (${keybinds.emergencyErase}):`, error);
         }
     }
 }

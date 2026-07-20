@@ -178,6 +178,7 @@ export class AICustomizeView extends LitElement {
         _preview: { state: true },
         _error: { state: true },
         _copied: { state: true },
+        _loadError: { state: true },
     };
 
     constructor() {
@@ -189,6 +190,7 @@ export class AICustomizeView extends LitElement {
         this._preview = '';
         this._error = '';
         this._copied = false;
+        this._loadError = '';
         this._load();
     }
 
@@ -197,9 +199,24 @@ export class AICustomizeView extends LitElement {
     }
 
     async _load() {
-        const prefs = await cheatingDaddy.storage.getPreferences();
-        this._profiles = prefs.availableProfiles || [];
-        this._selectDraft();
+        try {
+            this._loadError = '';
+            const prefs = await window.cheatingDaddy.storage.getPreferences();
+            this._profiles = Array.isArray(prefs.availableProfiles) ? prefs.availableProfiles : [];
+            if (!this._profiles.length) {
+                this._loadError = 'No profiles found. Restart the app or restore defaults in Settings.';
+                this._draft = null;
+                this.requestUpdate();
+                return;
+            }
+            this._selectDraft();
+            this.requestUpdate();
+        } catch (error) {
+            console.error('Error loading AI profiles:', error);
+            this._loadError = error?.message || 'Failed to load profiles';
+            this._draft = null;
+            this.requestUpdate();
+        }
     }
 
     _selectDraft() {
@@ -216,13 +233,13 @@ export class AICustomizeView extends LitElement {
     }
 
     async _refreshPreview() {
-        if (this._draft) this._preview = await cheatingDaddy.storage.compileAiProfile(this._draft);
+        if (this._draft) this._preview = await window.cheatingDaddy.storage.compileAiProfile(this._draft);
     }
 
     async _patch(patch) {
         try {
             this._error = '';
-            const result = await cheatingDaddy.storage.updateAiProfile(this._draft.id, patch);
+            const result = await window.cheatingDaddy.storage.updateAiProfile(this._draft.id, patch);
             await this._load();
             if (result.createdCopy || result.profile.id !== this.selectedProfile) await this._select(result.profile.id);
             else this._draft = result.profile;
@@ -238,14 +255,14 @@ export class AICustomizeView extends LitElement {
     }
 
     async _new(sourceId = null) {
-        const profile = await cheatingDaddy.storage.createAiProfile(sourceId);
+        const profile = await window.cheatingDaddy.storage.createAiProfile(sourceId);
         await this._load();
         await this._select(profile.id);
     }
 
     async _delete() {
         if (this._draft?.isBuiltin || !confirm(`Delete "${this._draft?.name}"?`)) return;
-        const fallback = await cheatingDaddy.storage.deleteAiProfile(this._draft.id);
+        const fallback = await window.cheatingDaddy.storage.deleteAiProfile(this._draft.id);
         await this._load();
         await this._select(fallback);
     }
@@ -254,7 +271,7 @@ export class AICustomizeView extends LitElement {
         const file = e.target.files?.[0];
         if (!file) return;
         try {
-            const profile = await cheatingDaddy.storage.importAiProfile(await file.text());
+            const profile = await window.cheatingDaddy.storage.importAiProfile(await file.text());
             await this._load();
             await this._select(profile.id);
         } catch (error) {
@@ -284,7 +301,9 @@ export class AICustomizeView extends LitElement {
     }
 
     render() {
-        if (!this._draft) return html`<div class="unified-page"><div class="unified-wrap">Loading profiles…</div></div>`;
+        if (!this._draft) {
+            return html`<div class="unified-page"><div class="unified-wrap">${this._loadError || 'Loading profiles…'}</div></div>`;
+        }
         const builtIns = this._profiles.filter(profile => profile.isBuiltin);
         const custom = this._profiles.filter(profile => !profile.isBuiltin);
         const p = this._draft.prompt;

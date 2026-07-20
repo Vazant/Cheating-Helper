@@ -19,6 +19,11 @@ app.whenReady().then(async () => {
     // Initialize storage (checks version, resets if needed)
     storage.initializeStorage();
 
+    // Register IPC before creating the window so renderer invokes never race
+    setupGeminiIpcHandlers(geminiSessionRef);
+    setupStorageIpcHandlers();
+    setupGeneralIpcHandlers();
+
     // Trigger screen recording permission prompt on macOS if not already granted
     if (process.platform === 'darwin') {
         const { desktopCapturer } = require('electron');
@@ -26,9 +31,6 @@ app.whenReady().then(async () => {
     }
 
     createMainWindow();
-    setupGeminiIpcHandlers(geminiSessionRef);
-    setupStorageIpcHandlers();
-    setupGeneralIpcHandlers();
 });
 
 app.on('window-all-closed', () => {

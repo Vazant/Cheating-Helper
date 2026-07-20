@@ -225,6 +225,8 @@ function initializeStorage() {
     if (JSON.stringify(credentials.groqApiKeys) !== JSON.stringify(groqApiKeys) || credentials.activeGroqApiKeyIndex !== activeGroqApiKeyIndex) {
         setCredentials({ groqApiKeys, activeGroqApiKeyIndex, groqApiKey: groqApiKeys[activeGroqApiKeyIndex] || '' });
     }
+    // Drop accidental availableProfiles blob from older updatePreference writes
+    persistPreferences(getPreferences());
     migrateLegacyCustomPrompt();
 }
 
@@ -326,16 +328,20 @@ function getPreferences() {
     };
 }
 
+function persistPreferences(preferences) {
+    const { availableProfiles, ...persisted } = preferences;
+    persisted.hostedTextModel = normalizeHostedTextModel(persisted.hostedTextModel);
+    persisted.visionProvider = normalizeVisionProvider(persisted.visionProvider);
+    persisted.audioMode = normalizeAudioMode(persisted.audioMode);
+    persisted.speechCaptureMode = normalizeSpeechCaptureMode(persisted.speechCaptureMode);
+    persisted.groqVisionModel = GROQ_VISION_MODEL;
+    return writeJsonFile(getPreferencesPath(), persisted);
+}
+
 function setPreferences(preferences) {
     const current = getPreferences();
     const { availableProfiles, ...persistedCurrent } = current;
-    const updated = { ...persistedCurrent, ...preferences };
-    updated.hostedTextModel = normalizeHostedTextModel(updated.hostedTextModel);
-    updated.visionProvider = normalizeVisionProvider(updated.visionProvider);
-    updated.audioMode = normalizeAudioMode(updated.audioMode);
-    updated.speechCaptureMode = normalizeSpeechCaptureMode(updated.speechCaptureMode);
-    updated.groqVisionModel = GROQ_VISION_MODEL;
-    return writeJsonFile(getPreferencesPath(), updated);
+    return persistPreferences({ ...persistedCurrent, ...preferences });
 }
 
 function updatePreference(key, value) {
@@ -349,9 +355,9 @@ function updatePreference(key, value) {
                 ? normalizeAudioMode(value)
                 : key === 'speechCaptureMode'
                   ? normalizeSpeechCaptureMode(value)
-                : value;
+                  : value;
     if (key === 'groqVisionModel') preferences[key] = GROQ_VISION_MODEL;
-    return writeJsonFile(getPreferencesPath(), preferences);
+    return persistPreferences(preferences);
 }
 
 // ============ AI PROFILES ============
