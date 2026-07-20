@@ -55,6 +55,10 @@ function normalizeAudioMode(value) {
     return value === 'mic_only' ? 'mic_only' : 'speaker_only';
 }
 
+function normalizeSpeechCaptureMode(value) {
+    return value === 'toggle' ? 'toggle' : 'always';
+}
+
 const DEFAULT_PREFERENCES = {
     customPrompt: '',
     providerMode: 'byok',
@@ -64,6 +68,7 @@ const DEFAULT_PREFERENCES = {
     selectedImageQuality: 'medium',
     advancedMode: false,
     audioMode: 'speaker_only',
+    speechCaptureMode: 'always',
     fontSize: 'medium',
     backgroundTransparency: 0.8,
     googleSearchEnabled: false,
@@ -304,6 +309,7 @@ function getPreferences() {
         ...DEFAULT_PREFERENCES,
         ...saved,
         audioMode: normalizeAudioMode(saved.audioMode),
+        speechCaptureMode: normalizeSpeechCaptureMode(saved.speechCaptureMode),
         hostedTextModel: normalizeHostedTextModel(saved.hostedTextModel),
         visionProvider: normalizeVisionProvider(saved.visionProvider),
         groqVisionModel: GROQ_VISION_MODEL,
@@ -327,6 +333,7 @@ function setPreferences(preferences) {
     updated.hostedTextModel = normalizeHostedTextModel(updated.hostedTextModel);
     updated.visionProvider = normalizeVisionProvider(updated.visionProvider);
     updated.audioMode = normalizeAudioMode(updated.audioMode);
+    updated.speechCaptureMode = normalizeSpeechCaptureMode(updated.speechCaptureMode);
     updated.groqVisionModel = GROQ_VISION_MODEL;
     return writeJsonFile(getPreferencesPath(), updated);
 }
@@ -340,6 +347,8 @@ function updatePreference(key, value) {
               ? normalizeVisionProvider(value)
               : key === 'audioMode'
                 ? normalizeAudioMode(value)
+                : key === 'speechCaptureMode'
+                  ? normalizeSpeechCaptureMode(value)
                 : value;
     if (key === 'groqVisionModel') preferences[key] = GROQ_VISION_MODEL;
     return writeJsonFile(getPreferencesPath(), preferences);

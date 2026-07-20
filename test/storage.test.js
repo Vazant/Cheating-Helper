@@ -28,6 +28,7 @@ try {
     assert.strictEqual(storage.activateGroqApiKey('missing'), false);
 
     const defaults = storage.getPreferences();
+    assert.strictEqual(defaults.speechCaptureMode, 'always');
     assert.strictEqual(defaults.visionProvider, 'groq');
     assert.strictEqual(defaults.groqVisionModel, 'qwen/qwen3.6-27b');
     assert.strictEqual(defaults.ollamaVisionModel, 'qwen3-vl:4b');
@@ -41,6 +42,10 @@ try {
     storage.updatePreference('ollamaVisionModel', 'custom-vl:latest');
     assert.strictEqual(storage.getPreferences().visionProvider, 'ollama');
     assert.strictEqual(storage.getPreferences().ollamaVisionModel, 'custom-vl:latest');
+    storage.updatePreference('speechCaptureMode', 'toggle');
+    assert.strictEqual(storage.getPreferences().speechCaptureMode, 'toggle');
+    storage.updatePreference('speechCaptureMode', 'invalid');
+    assert.strictEqual(storage.getPreferences().speechCaptureMode, 'always');
 
     const copy = storage.createAiProfile('interview');
     const updated = storage.updateAiProfile(copy.id, { prompt: { userContext: 'Profile A facts' } });

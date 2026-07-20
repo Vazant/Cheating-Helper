@@ -334,6 +334,25 @@ function processLocalAudio(monoChunk24k) {
     }
 }
 
+function resetLocalAudio() {
+    isSpeaking = false;
+    speechBuffers = [];
+    silenceFrameCount = 0;
+    speechFrameCount = 0;
+    resampleRemainder = Buffer.alloc(0);
+}
+
+function flushLocalAudio() {
+    if (!isSpeaking || !speechBuffers.length) {
+        resetLocalAudio();
+        return false;
+    }
+    const audioData = Buffer.concat(speechBuffers);
+    resetLocalAudio();
+    handleSpeechEnd(audioData);
+    return audioData.length >= 16000;
+}
+
 function closeLocalSession() {
     console.log('[LocalAI] Closing local session');
     isLocalActive = false;
@@ -434,6 +453,8 @@ async function sendLocalImage(base64Data, prompt, { host, model, systemPrompt } 
 module.exports = {
     initializeLocalSession,
     processLocalAudio,
+    resetLocalAudio,
+    flushLocalAudio,
     closeLocalSession,
     isLocalSessionActive,
     sendLocalText,

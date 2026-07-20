@@ -1018,7 +1018,7 @@ export class MainView extends LitElement {
                     this._mode === 'local'
                         ? html`
                               <div class="title-row">
-                                  <div class="page-title">Cheating Daddy <span class="mode-suffix">Local AI</span></div>
+                                  <div class="page-title">System Container <span class="mode-suffix">Local AI</span></div>
                                   <button
                                       class="help-btn"
                                       @click=${() => {
@@ -1029,7 +1029,7 @@ export class MainView extends LitElement {
                                   </button>
                               </div>
                           `
-                        : html` <div class="page-title">${html`Cheating Helper <span class="mode-suffix">Groq Text</span>`}</div> `
+                        : html` <div class="page-title">${html`System Container <span class="mode-suffix">Groq Text</span>`}</div> `
                 }
                 <div class="page-subtitle">
                     ${this._mode === 'byok' ? 'Typed text with your Groq API keys' : 'Run models locally on your machine'}

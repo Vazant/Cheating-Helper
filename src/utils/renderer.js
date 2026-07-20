@@ -1,5 +1,6 @@
 // renderer.js
 const { ipcRenderer } = require('electron');
+const { createSpeechCaptureGate } = require('./speechCapture');
 
 let mediaStream = null;
 let screenshotInterval = null;
@@ -145,6 +146,7 @@ const storage = {
 
 // Cache for preferences to avoid async calls in hot paths
 let preferencesCache = null;
+const speechCaptureGate = createSpeechCaptureGate();
 
 async function loadPreferencesCache() {
     preferencesCache = await storage.getPreferences();
@@ -232,7 +234,24 @@ async function initializeCloud(profile = 'interview') {
 // Listen for status updates
 ipcRenderer.on('update-status', (event, status) => {
     console.log('Status update:', status);
-    cheatingDaddy.setStatus(status);
+    const paused = preferencesCache?.speechCaptureMode === 'toggle' && !speechCaptureGate.isRecording();
+    cheatingDaddy.setStatus(paused && status === 'Listening...' ? 'Ready · use speech shortcut to record' : status);
+});
+
+ipcRenderer.on('shortcut-registration-status', (event, result) => {
+    if (result?.action === 'toggleSpeechCapture' && !result.success) cheatingDaddy.setStatus(result.error || 'Speech shortcut is unavailable');
+});
+
+ipcRenderer.on('toggle-speech-capture', async () => {
+    if (preferencesCache?.speechCaptureMode !== 'toggle' || (!mediaStream && !micStream)) return;
+    const recording = speechCaptureGate.toggle();
+    const result = await ipcRenderer.invoke(recording ? 'reset-speech-capture' : 'flush-speech-capture');
+    if (!result?.success) {
+        speechCaptureGate.toggle();
+        cheatingDaddy.setStatus(result?.error || 'Speech recording control failed');
+        return;
+    }
+    cheatingDaddy.setStatus(recording ? 'Recording...' : result.queued ? 'Transcribing...' : 'No speech detected');
 });
 
 async function startCapture(screenshotIntervalSeconds = 5, imageQuality = 'medium', captureAudio = true) {
@@ -242,6 +261,8 @@ async function startCapture(screenshotIntervalSeconds = 5, imageQuality = 'mediu
     // Refresh preferences cache
     await loadPreferencesCache();
     const audioMode = preferencesCache.audioMode === 'mic_only' ? 'mic_only' : 'speaker_only';
+    speechCaptureGate.reset(preferencesCache.speechCaptureMode);
+    await ipcRenderer.invoke('set-speech-capture-enabled', speechCaptureGate.isRecording());
 
     try {
         if (isMacOS) {
@@ -407,6 +428,7 @@ async function startCapture(screenshotIntervalSeconds = 5, imageQuality = 'mediu
 
         // Manual mode only - screenshots captured on demand via shortcut
         console.log('Manual mode enabled - screenshots will be captured on demand only');
+        if (preferencesCache.speechCaptureMode === 'toggle') cheatingDaddy.setStatus('Ready · use speech shortcut to record');
         return true;
     } catch (err) {
         console.error('Error starting capture:', err);
@@ -426,6 +448,10 @@ function setupLinuxMicProcessing(stream) {
     const samplesPerChunk = SAMPLE_RATE * AUDIO_CHUNK_DURATION;
 
     micProcessor.onaudioprocess = async e => {
+        if (!speechCaptureGate.isRecording()) {
+            audioBuffer = [];
+            return;
+        }
         const inputData = e.inputBuffer.getChannelData(0);
         audioBuffer.push(...inputData);
 
@@ -459,6 +485,10 @@ function setupLinuxSystemAudioProcessing() {
     const samplesPerChunk = SAMPLE_RATE * AUDIO_CHUNK_DURATION;
 
     audioProcessor.onaudioprocess = async e => {
+        if (!speechCaptureGate.isRecording()) {
+            audioBuffer = [];
+            return;
+        }
         const inputData = e.inputBuffer.getChannelData(0);
         audioBuffer.push(...inputData);
 
@@ -489,6 +519,10 @@ function setupWindowsLoopbackProcessing() {
     const samplesPerChunk = SAMPLE_RATE * AUDIO_CHUNK_DURATION;
 
     audioProcessor.onaudioprocess = async e => {
+        if (!speechCaptureGate.isRecording()) {
+            audioBuffer = [];
+            return;
+        }
         const inputData = e.inputBuffer.getChannelData(0);
         audioBuffer.push(...inputData);
 
@@ -707,6 +741,8 @@ async function captureManualScreenshot(imageQuality = null) {
 window.captureManualScreenshot = captureManualScreenshot;
 
 function stopCapture() {
+    speechCaptureGate.reset('toggle');
+    ipcRenderer.invoke('set-speech-capture-enabled', false).catch(() => {});
     if (screenshotInterval) {
         clearInterval(screenshotInterval);
         screenshotInterval = null;

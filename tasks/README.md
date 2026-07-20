@@ -26,3 +26,4 @@
 | 016 | Profile field limits and active context visibility | IN_PROGRESS | 013, 015 |
 | 017 | Live AI Profile switching | TODO — FUTURE | 016 |
 | 018 | Working Hosted Groq: keys, context, latency and voice commands | IN_PROGRESS | 011, 012, 013, 016 |
+| 019 | Speech-to-Text capture shortcut and toggle mode | PLANNING | 012, 018 |

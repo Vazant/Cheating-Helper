@@ -47,6 +47,7 @@ let currentGroqSession = null;
 let hostedAudioSegmenter = null;
 let hostedAudioSource = 'system';
 let hostedAudioQueue = Promise.resolve();
+let speechCaptureEnabled = true;
 let groqTextQueue = Promise.resolve();
 let hostedUtteranceId = 0;
 const pendingUtteranceIds = new Set();
@@ -375,6 +376,7 @@ function configureHostedAudio(audioMode) {
 }
 
 function processHostedAudioChunk(source, data, mimeType) {
+    if (!speechCaptureEnabled) return { success: true, ignored: true };
     if (!hostedAudioSegmenter || source !== hostedAudioSource) return { success: true, ignored: true };
     if (mimeType !== 'audio/pcm;rate=24000' || typeof data !== 'string') return { success: false, error: 'Unsupported audio format' };
     const pcmBuffer = Buffer.from(data, 'base64');
@@ -382,6 +384,7 @@ function processHostedAudioChunk(source, data, mimeType) {
 }
 
 function processHostedPcmBuffer(source, pcmBuffer) {
+    if (!speechCaptureEnabled) return { success: true, ignored: true };
     if (!hostedAudioSegmenter || source !== hostedAudioSource) return { success: true, ignored: true };
     if (!pcmBuffer.length || pcmBuffer.length % 2 || pcmBuffer.length > 24000 * 2) return { success: false, error: 'Invalid audio chunk' };
     hostedAudioSegmenter.push(pcmBuffer);
@@ -1039,7 +1042,7 @@ async function startMacOSAudioCapture(geminiSessionRef) {
             if (currentProviderMode === 'cloud') {
                 sendCloudAudio(monoChunk);
             } else if (currentProviderMode === 'local') {
-                getLocalAi().processLocalAudio(monoChunk);
+                if (speechCaptureEnabled) getLocalAi().processLocalAudio(monoChunk);
             } else {
                 processHostedPcmBuffer('system', monoChunk);
             }
@@ -1211,6 +1214,7 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
             tpmLimit: null,
         };
         configureHostedAudio(prefs.audioMode);
+        speechCaptureEnabled = prefs.speechCaptureMode !== 'toggle';
         initializeNewSession(selectedProfile.id, currentSystemPrompt, { profileName: selectedProfile.name, language: language.locale });
         sessionParams = null;
         geminiSessionRef.current = null;
@@ -1225,6 +1229,7 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
     ipcMain.handle('initialize-local', async (event, ollamaHost, ollamaModel, whisperModel, profile, customPrompt, language = 'en-US') => {
         currentProviderMode = 'local';
         currentGroqSession = null;
+        speechCaptureEnabled = getPreferences().speechCaptureMode !== 'toggle';
         const selectedProfile = getAiProfileSnapshot(profile);
         const languageConfig = getLanguageConfig(language);
         currentSystemPrompt = getSystemPrompt(selectedProfile, '', false, [], languageConfig.locale);
@@ -1243,6 +1248,7 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
     });
 
     ipcMain.handle('send-audio-content', async (event, { data, mimeType }) => {
+        if (!speechCaptureEnabled) return { success: true, ignored: true };
         if (currentProviderMode === 'cloud') {
             try {
                 const pcmBuffer = Buffer.from(data, 'base64');
@@ -1268,6 +1274,7 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
 
     // Handle microphone audio on a separate channel
     ipcMain.handle('send-mic-audio-content', async (event, { data, mimeType }) => {
+        if (!speechCaptureEnabled) return { success: true, ignored: true };
         if (currentProviderMode === 'cloud') {
             try {
                 const pcmBuffer = Buffer.from(data, 'base64');
@@ -1412,6 +1419,24 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
         }
     });
 
+    ipcMain.handle('set-speech-capture-enabled', (event, enabled) => {
+        speechCaptureEnabled = enabled === true;
+        return { success: true };
+    });
+
+    ipcMain.handle('reset-speech-capture', () => {
+        speechCaptureEnabled = true;
+        if (currentProviderMode === 'local') getLocalAi().resetLocalAudio();
+        else hostedAudioSegmenter?.reset();
+        return { success: true };
+    });
+
+    ipcMain.handle('flush-speech-capture', () => {
+        speechCaptureEnabled = false;
+        const queued = currentProviderMode === 'local' ? getLocalAi().flushLocalAudio() : Boolean(hostedAudioSegmenter?.flush());
+        return { success: true, queued };
+    });
+
     ipcMain.handle('close-session', async event => {
         try {
             stopMacOSAudioCapture();
@@ -1421,6 +1446,7 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
             pendingUtteranceIds.clear();
             hostedAudioQueue = Promise.resolve();
             groqTextQueue = Promise.resolve();
+            speechCaptureEnabled = true;
 
             if (currentProviderMode === 'cloud') {
                 closeCloud();

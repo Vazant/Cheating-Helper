@@ -105,6 +105,7 @@ function getDefaultKeybinds() {
         scrollUp: isMac ? 'Cmd+Shift+Up' : 'Ctrl+Shift+Up',
         scrollDown: isMac ? 'Cmd+Shift+Down' : 'Ctrl+Shift+Down',
         emergencyErase: isMac ? 'Cmd+Shift+E' : 'Ctrl+Shift+E',
+        toggleSpeechCapture: 'F8',
     };
 }
 
@@ -117,6 +118,22 @@ function updateGlobalShortcuts(keybinds, mainWindow, sendToRenderer, geminiSessi
     const primaryDisplay = screen.getPrimaryDisplay();
     const { width, height } = primaryDisplay.workAreaSize;
     const moveIncrement = Math.floor(Math.min(width, height) * 0.1);
+
+    if (keybinds.toggleSpeechCapture) {
+        try {
+            const registered = globalShortcut.register(keybinds.toggleSpeechCapture, () => sendToRenderer('toggle-speech-capture'));
+            if (!registered) {
+                sendToRenderer('shortcut-registration-status', {
+                    action: 'toggleSpeechCapture',
+                    success: false,
+                    error: `Could not register ${keybinds.toggleSpeechCapture}. Choose another shortcut.`,
+                });
+            }
+        } catch (error) {
+            console.error(`Failed to register toggleSpeechCapture (${keybinds.toggleSpeechCapture}):`, error);
+            sendToRenderer('shortcut-registration-status', { action: 'toggleSpeechCapture', success: false, error: error.message });
+        }
+    }
 
     const movementActions = {
         moveUp: () => {

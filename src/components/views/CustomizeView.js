@@ -210,6 +210,7 @@ export class CustomizeView extends LitElement {
         visionIncludeConversation: { type: Boolean },
         localVisionModels: { type: Array },
         localVisionStatus: { type: String },
+        speechCaptureMode: { type: String },
     };
 
     constructor() {
@@ -231,6 +232,7 @@ export class CustomizeView extends LitElement {
         this.backgroundTransparency = 0.8;
         this.fontSize = 20;
         this.audioMode = 'speaker_only';
+        this.speechCaptureMode = 'always';
         this.customPrompt = '';
         this.theme = 'dark';
         this.providerMode = 'byok';
@@ -255,6 +257,7 @@ export class CustomizeView extends LitElement {
             this.backgroundTransparency = prefs.backgroundTransparency ?? 0.8;
             this.fontSize = prefs.fontSize ?? 20;
             this.audioMode = prefs.audioMode === 'mic_only' ? 'mic_only' : 'speaker_only';
+            this.speechCaptureMode = prefs.speechCaptureMode === 'toggle' ? 'toggle' : 'always';
             this.customPrompt = prefs.customPrompt ?? '';
             this.theme = prefs.theme ?? 'dark';
             this.providerMode = prefs.providerMode === 'local' ? 'local' : 'byok';
@@ -335,6 +338,7 @@ export class CustomizeView extends LitElement {
             nextResponse: isMac ? 'Cmd+]' : 'Ctrl+]',
             scrollUp: isMac ? 'Cmd+Shift+Up' : 'Ctrl+Shift+Up',
             scrollDown: isMac ? 'Cmd+Shift+Down' : 'Ctrl+Shift+Down',
+            toggleSpeechCapture: 'F8',
         };
     }
 
@@ -351,6 +355,7 @@ export class CustomizeView extends LitElement {
             { key: 'nextResponse', name: 'Next Response', description: 'Move to next AI response' },
             { key: 'scrollUp', name: 'Scroll Response Up', description: 'Scroll response content upward' },
             { key: 'scrollDown', name: 'Scroll Response Down', description: 'Scroll response content downward' },
+            { key: 'toggleSpeechCapture', name: 'Start / Stop Speech Recording', description: 'Toggle speech recording during a session' },
         ];
     }
 
@@ -390,6 +395,13 @@ export class CustomizeView extends LitElement {
     async handleAudioModeSelect(e) {
         this.audioMode = e.target.value;
         await cheatingDaddy.storage.updatePreference('audioMode', this.audioMode);
+        this.requestUpdate();
+    }
+
+    async handleSpeechCaptureModeSelect(e) {
+        this.speechCaptureMode = e.target.value;
+        await cheatingDaddy.storage.updatePreference('speechCaptureMode', this.speechCaptureMode);
+        await cheatingDaddy.refreshPreferencesCache();
         this.requestUpdate();
     }
 
@@ -496,9 +508,18 @@ export class CustomizeView extends LitElement {
     }
 
     handleKeybindChange(action, value) {
+        const duplicate = Object.entries(this.keybinds).find(([key, keybind]) => key !== action && keybind === value);
+        if (duplicate) {
+            this.clearStatusMessage = `${value} is already assigned. Choose another shortcut.`;
+            this.clearStatusType = 'error';
+            this.requestUpdate();
+            return false;
+        }
+        this.clearStatusMessage = '';
         this.keybinds = { ...this.keybinds, [action]: value };
         this.saveKeybinds();
         this.requestUpdate();
+        return true;
     }
 
     handleKeybindFocus(e) {
@@ -546,8 +567,7 @@ export class CustomizeView extends LitElement {
 
         const action = e.target.dataset.action;
         const keybind = [...modifiers, mainKey].join('+');
-        this.handleKeybindChange(action, keybind);
-        e.target.value = keybind;
+        if (this.handleKeybindChange(action, keybind)) e.target.value = keybind;
         e.target.blur();
     }
 
@@ -576,6 +596,7 @@ export class CustomizeView extends LitElement {
                 selectedScreenshotInterval: '5',
                 selectedImageQuality: 'medium',
                 audioMode: 'speaker_only',
+                speechCaptureMode: 'always',
                 fontSize: 20,
                 backgroundTransparency: 0.8,
                 googleSearchEnabled: false,
@@ -604,6 +625,7 @@ export class CustomizeView extends LitElement {
             this.selectedLanguage = defaults.selectedLanguage;
             this.selectedImageQuality = defaults.selectedImageQuality;
             this.audioMode = defaults.audioMode;
+            this.speechCaptureMode = defaults.speechCaptureMode;
             this.fontSize = defaults.fontSize;
             this.backgroundTransparency = defaults.backgroundTransparency;
             this.googleSearchEnabled = defaults.googleSearchEnabled;
@@ -681,6 +703,16 @@ export class CustomizeView extends LitElement {
                         </select>
                     </div>
                     <div class="field-help">Choose one source. Both streams are intentionally disabled to prevent mixed transcripts.</div>
+                    <div class="form-group">
+                        <label class="form-label">Speech Recording</label>
+                        <select class="control" .value=${this.speechCaptureMode} @change=${this.handleSpeechCaptureModeSelect}>
+                            <option value="always">Always listen</option>
+                            <option value="toggle">Start / stop with shortcut</option>
+                        </select>
+                        <div class="form-hint">
+                            In shortcut mode, press the configured key once to record and again to transcribe and send. Audio outside that window is ignored.
+                        </div>
+                    </div>
                     <div class="form-group">
                         <label class="form-label">Image Quality</label>
                         <select class="control" .value=${this.selectedImageQuality} @change=${this.handleImageQualitySelect}>
@@ -865,6 +897,9 @@ export class CustomizeView extends LitElement {
                 <div style="margin-top: var(--space-sm);">
                     <button class="control" style="width:auto;padding:8px 10px;" @click=${this.resetKeybinds}>Reset to defaults</button>
                 </div>
+                ${this.clearStatusMessage && this.clearStatusType === 'error'
+                    ? html`<div class="status error">${this.clearStatusMessage}</div>`
+                    : ''}
             </section>
         `;
     }
