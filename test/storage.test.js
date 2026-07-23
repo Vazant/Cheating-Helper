@@ -18,12 +18,26 @@ fs.writeFileSync(
             {
                 id: 'profile_senior_java_interview',
                 name: 'Senior Java Interview',
-                prompt: { userContext: 'java facts', persona: 'java persona', answerRules: 'java rules', responseStyle: 'java style', length: 'detailed', format: 'teleprompter' },
+                prompt: {
+                    userContext: 'java facts',
+                    persona: 'java persona',
+                    answerRules: 'java rules',
+                    responseStyle: 'java style',
+                    length: 'detailed',
+                    format: 'teleprompter',
+                },
             },
             {
                 id: 'profile_epam_hr_call',
                 name: 'EPAM HR Call',
-                prompt: { userContext: 'old facts', persona: 'old persona', answerRules: 'old rules', responseStyle: 'old style', length: 'concise', format: 'teleprompter' },
+                prompt: {
+                    userContext: 'old facts',
+                    persona: 'old persona',
+                    answerRules: 'old rules',
+                    responseStyle: 'old style',
+                    length: 'concise',
+                    format: 'teleprompter',
+                },
             },
         ],
         migrations: {},
@@ -36,7 +50,7 @@ try {
     assert.strictEqual(storage.normalizeAudioMode('both'), 'speaker_only');
     assert.strictEqual(storage.normalizeAudioMode('mic_only'), 'mic_only');
     storage.initializeStorage();
-    assert.ok(storage.getAiProfile('profile_epam_hr_call').prompt.answerRules.includes("Why are you changing jobs?"));
+    assert.ok(storage.getAiProfile('profile_epam_hr_call').prompt.answerRules.includes('Why are you changing jobs?'));
     assert.deepStrictEqual(storage.getGroqApiKeys(), ['legacy-key']);
     assert.strictEqual(storage.getCredentials().unrelated, 'preserved');
 
@@ -50,6 +64,9 @@ try {
 
     const defaults = storage.getPreferences();
     assert.strictEqual(defaults.speechCaptureMode, 'always');
+    assert.strictEqual(defaults.hostedTextProvider, 'groq');
+    assert.strictEqual(defaults.omnirouteBaseUrl, 'http://127.0.0.1:20128/v1');
+    assert.strictEqual(defaults.omnirouteTextModel, 'auto');
     assert.strictEqual(defaults.visionProvider, 'groq');
     assert.strictEqual(defaults.groqVisionModel, 'qwen/qwen3.6-27b');
     assert.strictEqual(defaults.ollamaVisionModel, 'qwen3-vl:4b');
@@ -67,6 +84,14 @@ try {
     assert.strictEqual(storage.getPreferences().speechCaptureMode, 'toggle');
     storage.updatePreference('speechCaptureMode', 'invalid');
     assert.strictEqual(storage.getPreferences().speechCaptureMode, 'always');
+    storage.updatePreference('hostedTextProvider', 'omniroute');
+    storage.updatePreference('omnirouteBaseUrl', ' http://localhost:20128/v1/ ');
+    storage.updatePreference('omnirouteTextModel', ' custom-combo ');
+    assert.strictEqual(storage.getPreferences().hostedTextProvider, 'omniroute');
+    assert.strictEqual(storage.getPreferences().omnirouteBaseUrl, 'http://localhost:20128/v1');
+    assert.strictEqual(storage.getPreferences().omnirouteTextModel, 'custom-combo');
+    storage.setOmniRouteApiKey(' gateway-token ');
+    assert.strictEqual(storage.getOmniRouteApiKey(), 'gateway-token');
 
     const copy = storage.createAiProfile('interview');
     const updated = storage.updateAiProfile(copy.id, { prompt: { userContext: 'Profile A facts' } });

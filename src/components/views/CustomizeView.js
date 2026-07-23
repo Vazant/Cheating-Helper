@@ -203,7 +203,11 @@ export class CustomizeView extends LitElement {
         clearStatusMessage: { type: String },
         clearStatusType: { type: String },
         providerMode: { type: String },
+        hostedTextProvider: { type: String },
         hostedTextModel: { type: String },
+        omnirouteBaseUrl: { type: String },
+        omnirouteTextModel: { type: String },
+        omnirouteApiKey: { type: String },
         visionProvider: { type: String },
         ollamaVisionModel: { type: String },
         screenAnalysisPrompt: { type: String },
@@ -236,7 +240,11 @@ export class CustomizeView extends LitElement {
         this.customPrompt = '';
         this.theme = 'dark';
         this.providerMode = 'byok';
+        this.hostedTextProvider = 'groq';
         this.hostedTextModel = 'openai/gpt-oss-120b';
+        this.omnirouteBaseUrl = 'http://127.0.0.1:20128/v1';
+        this.omnirouteTextModel = 'auto';
+        this.omnirouteApiKey = '';
         this.visionProvider = 'groq';
         this.ollamaVisionModel = 'qwen3-vl:4b';
         this.screenAnalysisPrompt = '';
@@ -252,7 +260,11 @@ export class CustomizeView extends LitElement {
 
     async _loadFromStorage() {
         try {
-            const [prefs, keybinds] = await Promise.all([cheatingDaddy.storage.getPreferences(), cheatingDaddy.storage.getKeybinds()]);
+            const [prefs, keybinds, omnirouteApiKey] = await Promise.all([
+                cheatingDaddy.storage.getPreferences(),
+                cheatingDaddy.storage.getKeybinds(),
+                cheatingDaddy.storage.getOmniRouteApiKey(),
+            ]);
             this.googleSearchEnabled = prefs.googleSearchEnabled ?? true;
             this.backgroundTransparency = prefs.backgroundTransparency ?? 0.8;
             this.fontSize = prefs.fontSize ?? 20;
@@ -261,7 +273,11 @@ export class CustomizeView extends LitElement {
             this.customPrompt = prefs.customPrompt ?? '';
             this.theme = prefs.theme ?? 'dark';
             this.providerMode = prefs.providerMode === 'local' ? 'local' : 'byok';
+            this.hostedTextProvider = prefs.hostedTextProvider === 'omniroute' ? 'omniroute' : 'groq';
             this.hostedTextModel = prefs.hostedTextModel ?? 'openai/gpt-oss-120b';
+            this.omnirouteBaseUrl = prefs.omnirouteBaseUrl ?? 'http://127.0.0.1:20128/v1';
+            this.omnirouteTextModel = prefs.omnirouteTextModel ?? 'auto';
+            this.omnirouteApiKey = omnirouteApiKey;
             this.visionProvider = prefs.visionProvider ?? 'groq';
             this.ollamaVisionModel = prefs.ollamaVisionModel ?? 'qwen3-vl:4b';
             this.screenAnalysisPrompt = prefs.screenAnalysisPrompt ?? '';
@@ -409,6 +425,29 @@ export class CustomizeView extends LitElement {
         this.hostedTextModel = e.target.value;
         await cheatingDaddy.storage.updatePreference('hostedTextModel', this.hostedTextModel);
         this.requestUpdate();
+    }
+
+    async handleHostedTextProviderSelect(e) {
+        this.hostedTextProvider = e.target.value;
+        await cheatingDaddy.storage.updatePreference('hostedTextProvider', this.hostedTextProvider);
+        this.requestUpdate();
+    }
+
+    async handleOmniRouteBaseUrlChange(e) {
+        await cheatingDaddy.storage.updatePreference('omnirouteBaseUrl', e.target.value);
+        this.omnirouteBaseUrl = (await cheatingDaddy.storage.getPreferences()).omnirouteBaseUrl;
+        this.requestUpdate();
+    }
+
+    async handleOmniRouteTextModelChange(e) {
+        await cheatingDaddy.storage.updatePreference('omnirouteTextModel', e.target.value);
+        this.omnirouteTextModel = (await cheatingDaddy.storage.getPreferences()).omnirouteTextModel;
+        this.requestUpdate();
+    }
+
+    async handleOmniRouteApiKeyChange(e) {
+        this.omnirouteApiKey = e.target.value;
+        await cheatingDaddy.storage.setOmniRouteApiKey(this.omnirouteApiKey);
     }
 
     async handleVisionProviderSelect(e) {
@@ -601,7 +640,10 @@ export class CustomizeView extends LitElement {
                 backgroundTransparency: 0.8,
                 googleSearchEnabled: false,
                 theme: 'dark',
+                hostedTextProvider: 'groq',
                 hostedTextModel: 'openai/gpt-oss-120b',
+                omnirouteBaseUrl: 'http://127.0.0.1:20128/v1',
+                omnirouteTextModel: 'auto',
                 visionProvider: 'groq',
                 groqVisionModel: 'qwen/qwen3.6-27b',
                 ollamaVisionModel: 'qwen3-vl:4b',
@@ -631,7 +673,10 @@ export class CustomizeView extends LitElement {
             this.googleSearchEnabled = defaults.googleSearchEnabled;
             this.customPrompt = defaults.customPrompt;
             this.theme = defaults.theme;
+            this.hostedTextProvider = defaults.hostedTextProvider;
             this.hostedTextModel = defaults.hostedTextModel;
+            this.omnirouteBaseUrl = defaults.omnirouteBaseUrl;
+            this.omnirouteTextModel = defaults.omnirouteTextModel;
             this.visionProvider = defaults.visionProvider;
             this.ollamaVisionModel = defaults.ollamaVisionModel;
             this.screenAnalysisPrompt = defaults.screenAnalysisPrompt;
@@ -710,7 +755,8 @@ export class CustomizeView extends LitElement {
                             <option value="toggle">Start / stop with shortcut</option>
                         </select>
                         <div class="form-hint">
-                            In shortcut mode, press the configured key once to record and again to transcribe and send. Audio outside that window is ignored.
+                            In shortcut mode, press the configured key once to record and again to transcribe and send. Audio outside that window is
+                            ignored.
                         </div>
                     </div>
                     <div class="form-group">
@@ -735,13 +781,55 @@ export class CustomizeView extends LitElement {
                 <div class="surface-subtitle">Hosted</div>
                 <div class="form-grid">
                     <div class="form-group">
-                        <label class="form-label">Text Response Model</label>
-                        <select class="control" .value=${this.hostedTextModel} @change=${this.handleHostedTextModelSelect}>
-                            <option value="openai/gpt-oss-120b">GPT-OSS 120B — Quality (recommended)</option>
-                            <option value="openai/gpt-oss-20b">GPT-OSS 20B — Faster</option>
-                            <option value="qwen/qwen3.6-27b">Qwen 3.6 27B — Alternative</option>
+                        <label class="form-label">Text Provider</label>
+                        <select class="control" .value=${this.hostedTextProvider} @change=${this.handleHostedTextProviderSelect}>
+                            <option value="groq">Groq — Direct</option>
+                            <option value="omniroute">OmniRoute — Local gateway</option>
                         </select>
-                        <div class="form-hint">Used only to generate text answers from transcripts and typed questions.</div>
+                    </div>
+                    ${
+                        this.hostedTextProvider === 'groq'
+                            ? html`<div class="form-group">
+                                  <label class="form-label">Text Response Model</label>
+                                  <select class="control" .value=${this.hostedTextModel} @change=${this.handleHostedTextModelSelect}>
+                                      <option value="openai/gpt-oss-120b">GPT-OSS 120B — Quality (recommended)</option>
+                                      <option value="openai/gpt-oss-20b">GPT-OSS 20B — Faster</option>
+                                      <option value="qwen/qwen3.6-27b">Qwen 3.6 27B — Alternative</option>
+                                  </select>
+                              </div>`
+                            : html`
+                                  <div class="form-group">
+                                      <label class="form-label">OmniRoute URL</label>
+                                      <input
+                                          class="control"
+                                          type="url"
+                                          .value=${this.omnirouteBaseUrl}
+                                          @change=${this.handleOmniRouteBaseUrlChange}
+                                      />
+                                  </div>
+                                  <div class="form-group">
+                                      <label class="form-label">Model or combo</label>
+                                      <input
+                                          class="control"
+                                          type="text"
+                                          .value=${this.omnirouteTextModel}
+                                          @change=${this.handleOmniRouteTextModelChange}
+                                      />
+                                  </div>
+                                  <div class="form-group">
+                                      <label class="form-label">Gateway token (optional)</label>
+                                      <input
+                                          class="control"
+                                          type="password"
+                                          autocomplete="off"
+                                          .value=${this.omnirouteApiKey}
+                                          @change=${this.handleOmniRouteApiKeyChange}
+                                      />
+                                  </div>
+                              `
+                    }
+                    <div class="form-hint">
+                        OmniRoute affects text responses only. Speech recognition and screenshot analysis keep their current providers.
                     </div>
                 </div>
             </section>
@@ -897,9 +985,7 @@ export class CustomizeView extends LitElement {
                 <div style="margin-top: var(--space-sm);">
                     <button class="control" style="width:auto;padding:8px 10px;" @click=${this.resetKeybinds}>Reset to defaults</button>
                 </div>
-                ${this.clearStatusMessage && this.clearStatusType === 'error'
-                    ? html`<div class="status error">${this.clearStatusMessage}</div>`
-                    : ''}
+                ${this.clearStatusMessage && this.clearStatusType === 'error' ? html`<div class="status error">${this.clearStatusMessage}</div>` : ''}
             </section>
         `;
     }

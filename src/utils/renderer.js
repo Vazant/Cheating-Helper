@@ -66,6 +66,13 @@ const storage = {
     async setGroqApiKeys(groqApiKeys) {
         return ipcRenderer.invoke('storage:set-groq-api-keys', groqApiKeys);
     },
+    async getOmniRouteApiKey() {
+        const result = await ipcRenderer.invoke('storage:get-omniroute-api-key');
+        return result.success ? result.data : '';
+    },
+    async setOmniRouteApiKey(omnirouteApiKey) {
+        return ipcRenderer.invoke('storage:set-omniroute-api-key', omnirouteApiKey);
+    },
 
     // Preferences
     async getPreferences() {
@@ -192,7 +199,8 @@ async function initializeGemini(profile = 'interview', language = 'en-US') {
 async function initializeGroq(profile = 'interview', language = 'en-US') {
     const result = await ipcRenderer.invoke('initialize-groq', profile, language);
     const success = result === true || result?.success === true;
-    cheatingDaddy.setStatus(success ? 'Groq text mode' : 'error');
+    const prefs = await storage.getPreferences();
+    cheatingDaddy.setStatus(success ? (prefs.hostedTextProvider === 'omniroute' ? 'OmniRoute text mode' : 'Groq text mode') : 'error');
     return success ? result : false;
 }
 

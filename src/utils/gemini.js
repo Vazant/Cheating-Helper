@@ -9,9 +9,11 @@ const {
     getApiKey,
     getGroqApiKeySequence,
     activateGroqApiKey,
+    getOmniRouteApiKey,
     getPreferences,
     getAiProfile,
 } = require('../storage');
+const { buildOmniRouteChatRequest } = require('./omniroute');
 const { connectCloud, sendCloudAudio, sendCloudText, sendCloudImage, closeCloud, isCloudActive, setOnTurnComplete } = require('./cloud');
 const { GROQ_VISION_MODEL, buildVisionPrompt } = require('./vision');
 const { getLanguageConfig } = require('./aiProfiles');
@@ -290,8 +292,12 @@ function readGroqError(errorText) {
     }
 }
 
+function sendToHostedText(text) {
+    return currentGroqSession?.provider === 'omniroute' ? sendToOmniRoute(text) : sendToGroq(text);
+}
+
 function queueGroqText(text) {
-    const queued = groqTextQueue.then(() => sendToGroq(text));
+    const queued = groqTextQueue.then(() => sendToHostedText(text));
     groqTextQueue = queued.catch(error => {
         console.error('[Groq text queue]', error.message);
         sendToRenderer('update-status', `Groq request failed: ${error.message}`);
@@ -629,7 +635,10 @@ async function sendToGroq(transcription) {
         saveConversationTurn(transcription, cleanedResponse);
 
         if (finishReason === 'length') {
-            sendToRenderer('update-response', createResponseUpdate(`${cleanedResponse}\n\n_Response stopped because the token limit was reached._`, responseId));
+            sendToRenderer(
+                'update-response',
+                createResponseUpdate(`${cleanedResponse}\n\n_Response stopped because the token limit was reached._`, responseId)
+            );
             sendToRenderer('update-status', 'Groq response stopped at the token limit');
             return true;
         }
@@ -641,6 +650,105 @@ async function sendToGroq(transcription) {
 
     removeUserTurn();
     return false;
+}
+
+async function sendToOmniRoute(transcription) {
+    if (!transcription || !transcription.trim()) return false;
+
+    const userTurn = { role: 'user', content: transcription.trim() };
+    groqConversationHistory.push(userTurn);
+    const removeUserTurn = () => {
+        const index = groqConversationHistory.lastIndexOf(userTurn);
+        if (index !== -1) groqConversationHistory.splice(index, 1);
+    };
+    const requestPlan = buildGroqRequestPlan(
+        currentGroqSession?.systemPrompt || currentSystemPrompt,
+        groqConversationHistory,
+        currentGroqSession?.behavior,
+        currentGroqSession?.tpmLimit
+    );
+    if (requestPlan.error) {
+        removeUserTurn();
+        sendToRenderer('update-status', requestPlan.error);
+        return false;
+    }
+
+    const model = currentGroqSession?.model || 'auto';
+    const apiKey = getOmniRouteApiKey();
+    const request = buildOmniRouteChatRequest(currentGroqSession?.baseUrl, apiKey, model, requestPlan.messages, requestPlan.maxCompletionTokens);
+    let response;
+    try {
+        response = await fetch(request.url, request.options);
+    } catch (error) {
+        removeUserTurn();
+        console.error('[OmniRoute network error]', error.message);
+        sendToRenderer('update-status', `Cannot reach OmniRoute: ${error.message}`);
+        return false;
+    }
+
+    if (!response.ok) {
+        removeUserTurn();
+        const details = await response.text().catch(() => '');
+        console.error('[OmniRoute API error]', JSON.stringify({ provider: 'omniroute', model, status: response.status }));
+        sendToRenderer('update-status', `OmniRoute error (${response.status})${details ? `: ${details.slice(0, 200)}` : ''}`);
+        return false;
+    }
+
+    const reader = response.body?.getReader();
+    if (!reader) {
+        removeUserTurn();
+        sendToRenderer('update-status', 'OmniRoute returned an unreadable response');
+        return false;
+    }
+
+    const responseId = createResponseId();
+    const decoder = new TextDecoder();
+    let fullText = '';
+    let isFirst = true;
+    let lastRenderedText = '';
+    const parser = createSseParser(data => {
+        const event = readGroqSseEvent(data);
+        if (!event?.content) return;
+        fullText += event.content;
+        const displayText = stripThinkingTags(fullText);
+        if (!displayText) return;
+        sendToRenderer(
+            isFirst ? 'new-response' : 'update-response',
+            isFirst ? createResponsePayload(displayText, transcription, responseId) : createResponseUpdate(displayText, responseId)
+        );
+        isFirst = false;
+        lastRenderedText = displayText;
+    });
+
+    try {
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            parser.push(decoder.decode(value, { stream: true }));
+        }
+        parser.push(decoder.decode());
+        parser.end();
+    } catch (error) {
+        removeUserTurn();
+        sendToRenderer('update-status', `OmniRoute streaming error: ${error.message}`);
+        return false;
+    }
+
+    const cleanedResponse = stripThinkingTags(fullText);
+    if (!cleanedResponse) {
+        removeUserTurn();
+        sendToRenderer('update-status', `OmniRoute returned no response content (${model})`);
+        return false;
+    }
+    if (cleanedResponse !== lastRenderedText)
+        sendToRenderer(
+            isFirst ? 'new-response' : 'update-response',
+            isFirst ? createResponsePayload(cleanedResponse, transcription, responseId) : createResponseUpdate(cleanedResponse, responseId)
+        );
+    groqConversationHistory.push({ role: 'assistant', content: cleanedResponse });
+    saveConversationTurn(transcription, cleanedResponse);
+    sendToRenderer('update-status', 'Listening...');
+    return true;
 }
 
 async function sendGroqImage(base64Data, prompt) {
@@ -842,7 +950,7 @@ async function initializeGeminiSession(apiKey, customPrompt = '', profile = 'int
 
                     if (message.serverContent?.generationComplete) {
                         if (currentTranscription.trim() !== '') {
-                            sendToGroq(currentTranscription);
+                            sendToHostedText(currentTranscription);
                             currentTranscription = '';
                         }
                         messageBuffer = '';
@@ -1216,9 +1324,10 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
     });
 
     ipcMain.handle('initialize-groq', async (event, profile = 'interview', selectedLanguage = 'en-US') => {
-        if (!getGroqApiKeySequence().length) return false;
-        currentProviderMode = 'groq';
         const prefs = getPreferences();
+        const hostedTextProvider = prefs.hostedTextProvider === 'omniroute' ? 'omniroute' : 'groq';
+        if (hostedTextProvider === 'groq' && !getGroqApiKeySequence().length) return false;
+        currentProviderMode = hostedTextProvider;
         const selectedProfile = getAiProfileSnapshot(profile);
         const language = getLanguageConfig(selectedLanguage);
         currentSystemPrompt = getSystemPrompt(selectedProfile, '', false, [], language.locale);
@@ -1226,7 +1335,9 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
             profileId: selectedProfile.id,
             profileName: selectedProfile.name,
             systemPrompt: currentSystemPrompt,
-            model: prefs.hostedTextModel,
+            provider: hostedTextProvider,
+            model: hostedTextProvider === 'omniroute' ? prefs.omnirouteTextModel : prefs.hostedTextModel,
+            baseUrl: prefs.omnirouteBaseUrl,
             behavior: { ...selectedProfile.behavior },
             language,
             tpmLimit: null,

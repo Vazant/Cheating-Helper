@@ -158,6 +158,23 @@ function setupStorageIpcHandlers() {
         }
     });
 
+    ipcMain.handle('storage:get-omniroute-api-key', async () => {
+        try {
+            return { success: true, data: storage.getOmniRouteApiKey() };
+        } catch (error) {
+            return { success: false, error: error.message };
+        }
+    });
+
+    ipcMain.handle('storage:set-omniroute-api-key', async (event, omnirouteApiKey) => {
+        try {
+            storage.setOmniRouteApiKey(omnirouteApiKey);
+            return { success: true };
+        } catch (error) {
+            return { success: false, error: error.message };
+        }
+    });
+
     // ============ PREFERENCES ============
     ipcMain.handle('storage:get-preferences', async () => {
         try {

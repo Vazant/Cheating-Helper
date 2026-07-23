@@ -32,3 +32,4 @@
 | 022 | Показывать исходный вопрос над ответом | IN_PROGRESS | 012, 018, 019, 021 |
 | 023 | Естественные и стабильные ответы EPAM HR Call | IN_PROGRESS | 020 |
 | 024 | Копирование текста из History | TODO — FUTURE | — |
+| 025 | OmniRoute hosted text provider | IN_PROGRESS | Запущенный локальный OmniRoute для smoke |

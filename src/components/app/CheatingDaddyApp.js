@@ -650,7 +650,7 @@ export class CheatingDaddyApp extends LitElement {
             }
         } else {
             const groqApiKeys = await cheatingDaddy.storage.getGroqApiKeys();
-            if (!groqApiKeys.length) {
+            if (prefs.hostedTextProvider !== 'omniroute' && !groqApiKeys.length) {
                 const mainView = this.shadowRoot.querySelector('main-view');
                 if (mainView && mainView.triggerApiKeyError) {
                     mainView.triggerApiKeyError();

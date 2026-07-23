@@ -2,6 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { DEFAULT_GROQ_MODEL, GROQ_MODELS } = require('./utils/groq');
+const { DEFAULT_OMNIROUTE_BASE_URL, DEFAULT_OMNIROUTE_MODEL, normalizeOmniRouteBaseUrl, normalizeOmniRouteModel } = require('./utils/omniroute');
 const { GROQ_VISION_MODEL, DEFAULT_OLLAMA_VISION_MODEL, DEFAULT_SCREEN_ANALYSIS_PROMPT, normalizeVisionProvider } = require('./utils/vision');
 const { PROFILE_SCHEMA_VERSION, SENIOR_JAVA_PROFILE, importProfile, normalizeProfile, normalizeUserProfiles } = require('./utils/aiProfiles');
 const { getAvailableProfiles } = require('./utils/prompts');
@@ -16,6 +17,10 @@ function normalizeHostedTextModel(model) {
     return DEFAULT_GROQ_MODEL;
 }
 
+function normalizeHostedTextProvider(provider) {
+    return provider === 'omniroute' ? 'omniroute' : 'groq';
+}
+
 // Default values
 const DEFAULT_CONFIG = {
     configVersion: CONFIG_VERSION,
@@ -28,6 +33,7 @@ const DEFAULT_CREDENTIALS = {
     groqApiKey: '',
     groqApiKeys: [],
     activeGroqApiKeyIndex: 0,
+    omnirouteApiKey: '',
 };
 
 function normalizeGroqApiKeys(keys, legacyKey = '') {
@@ -74,6 +80,9 @@ const DEFAULT_PREFERENCES = {
     backgroundTransparency: 0.8,
     googleSearchEnabled: false,
     hostedTextModel: DEFAULT_GROQ_MODEL,
+    hostedTextProvider: 'groq',
+    omnirouteBaseUrl: DEFAULT_OMNIROUTE_BASE_URL,
+    omnirouteTextModel: DEFAULT_OMNIROUTE_MODEL,
     visionProvider: 'groq',
     groqVisionModel: GROQ_VISION_MODEL,
     ollamaVisionModel: DEFAULT_OLLAMA_VISION_MODEL,
@@ -305,6 +314,15 @@ function activateGroqApiKey(groqApiKey) {
     return setCredentials({ activeGroqApiKeyIndex, groqApiKey });
 }
 
+function getOmniRouteApiKey() {
+    const value = getCredentials().omnirouteApiKey;
+    return typeof value === 'string' ? value.trim() : '';
+}
+
+function setOmniRouteApiKey(omnirouteApiKey) {
+    return setCredentials({ omnirouteApiKey: typeof omnirouteApiKey === 'string' ? omnirouteApiKey.trim() : '' });
+}
+
 // ============ PREFERENCES ============
 
 function getPreferences() {
@@ -315,6 +333,9 @@ function getPreferences() {
         audioMode: normalizeAudioMode(saved.audioMode),
         speechCaptureMode: normalizeSpeechCaptureMode(saved.speechCaptureMode),
         hostedTextModel: normalizeHostedTextModel(saved.hostedTextModel),
+        hostedTextProvider: normalizeHostedTextProvider(saved.hostedTextProvider),
+        omnirouteBaseUrl: normalizeOmniRouteBaseUrl(saved.omnirouteBaseUrl),
+        omnirouteTextModel: normalizeOmniRouteModel(saved.omnirouteTextModel),
         visionProvider: normalizeVisionProvider(saved.visionProvider),
         groqVisionModel: GROQ_VISION_MODEL,
         ollamaVisionModel:
@@ -333,6 +354,9 @@ function getPreferences() {
 function persistPreferences(preferences) {
     const { availableProfiles, ...persisted } = preferences;
     persisted.hostedTextModel = normalizeHostedTextModel(persisted.hostedTextModel);
+    persisted.hostedTextProvider = normalizeHostedTextProvider(persisted.hostedTextProvider);
+    persisted.omnirouteBaseUrl = normalizeOmniRouteBaseUrl(persisted.omnirouteBaseUrl);
+    persisted.omnirouteTextModel = normalizeOmniRouteModel(persisted.omnirouteTextModel);
     persisted.visionProvider = normalizeVisionProvider(persisted.visionProvider);
     persisted.audioMode = normalizeAudioMode(persisted.audioMode);
     persisted.speechCaptureMode = normalizeSpeechCaptureMode(persisted.speechCaptureMode);
@@ -351,13 +375,19 @@ function updatePreference(key, value) {
     preferences[key] =
         key === 'hostedTextModel'
             ? normalizeHostedTextModel(value)
-            : key === 'visionProvider'
-              ? normalizeVisionProvider(value)
-              : key === 'audioMode'
-                ? normalizeAudioMode(value)
-                : key === 'speechCaptureMode'
-                  ? normalizeSpeechCaptureMode(value)
-                  : value;
+            : key === 'hostedTextProvider'
+              ? normalizeHostedTextProvider(value)
+              : key === 'omnirouteBaseUrl'
+                ? normalizeOmniRouteBaseUrl(value)
+                : key === 'omnirouteTextModel'
+                  ? normalizeOmniRouteModel(value)
+                  : key === 'visionProvider'
+                    ? normalizeVisionProvider(value)
+                    : key === 'audioMode'
+                      ? normalizeAudioMode(value)
+                      : key === 'speechCaptureMode'
+                        ? normalizeSpeechCaptureMode(value)
+                        : value;
     if (key === 'groqVisionModel') preferences[key] = GROQ_VISION_MODEL;
     return persistPreferences(preferences);
 }
@@ -730,10 +760,13 @@ module.exports = {
     setGroqApiKeys,
     getGroqApiKeySequence,
     activateGroqApiKey,
+    getOmniRouteApiKey,
+    setOmniRouteApiKey,
     normalizeGroqApiKeys,
     normalizeGroqApiKeyIndex,
     orderGroqApiKeys,
     normalizeAudioMode,
+    normalizeHostedTextProvider,
 
     // Preferences
     getPreferences,

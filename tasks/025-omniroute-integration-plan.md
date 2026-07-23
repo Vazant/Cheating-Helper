@@ -1,6 +1,6 @@
 # 025 — Исследование интеграции OmniRoute
 
-Статус: `BLOCKED` (нужно решение пользователя по области первого этапа и fallback)
+Статус: `IN_PROGRESS` (реализация и автоматические проверки готовы; ожидается smoke с запущенным OmniRoute)
 
 ## Цель
 
@@ -30,13 +30,13 @@ OmniRoute должен оставаться отдельным процессо�
 
 ## Матрица возможностей
 
-| Роль | Текущий путь | Возможный OmniRoute путь | Ограничение |
-|---|---|---|---|
-| Text response | Groq chat completions | `/v1/chat/completions`, direct model или combo | На первом этапе использовать только text-capable combo |
-| Screenshot vision | Groq multimodal chat | `/v1/chat/completions` с `image_url` | Combo обязан состоять только из vision-capable targets |
-| Hosted STT | Groq Whisper file POST | `/v1/audio/transcriptions` | Это отдельный endpoint/model; text combo сюда неприменим |
-| Live audio | Не является обычным chat completion | Не подтверждено как realtime/live transport | Не включать в первый этап |
-| Local inference | Ollama | Оставить прямым либо позже маршрутизировать отдельно | Не менять без отдельного решения |
+| Роль              | Текущий путь                        | Возможный OmniRoute путь                             | Ограничение                                              |
+| ----------------- | ----------------------------------- | ---------------------------------------------------- | -------------------------------------------------------- |
+| Text response     | Groq chat completions               | `/v1/chat/completions`, direct model или combo       | На первом этапе использовать только text-capable combo   |
+| Screenshot vision | Groq multimodal chat                | `/v1/chat/completions` с `image_url`                 | Combo обязан состоять только из vision-capable targets   |
+| Hosted STT        | Groq Whisper file POST              | `/v1/audio/transcriptions`                           | Это отдельный endpoint/model; text combo сюда неприменим |
+| Live audio        | Не является обычным chat completion | Не подтверждено как realtime/live transport          | Не включать в первый этап                                |
+| Local inference   | Ollama                              | Оставить прямым либо позже маршрутизировать отдельно | Не менять без отдельного решения                         |
 
 ## Рекомендуемый минимальный первый этап
 
@@ -114,13 +114,13 @@ omnirouteTextModel = "auto"
 - [x] `DONE` Найти текущие text, vision, STT, credential и rate-limit paths проекта.
 - [x] `DONE` Составить capability matrix и минимальную границу первого этапа.
 - [x] `DONE` Сформулировать агентно-исполняемое задание для text-only этапа.
-- [ ] `BLOCKED` Получить решение пользователя: text-only pilot или сразу text + vision + STT.
-- [ ] `BLOCKED` Получить решение пользователя: OmniRoute только как явный provider или разрешён автоматический cross-provider fallback.
+- [x] `DONE` Получить решение пользователя: первый этап ограничен text-only.
+- [x] `DONE` Получить решение пользователя: OmniRoute является явным provider без автоматического cross-provider fallback.
 - [ ] `TODO` После подтверждения проверить актуальный `/v1/models` и выбранные combo targets на локальном экземпляре пользователя.
-- [ ] `TODO` Спроектировать provider-neutral request adapter без новой SDK-зависимости.
-- [ ] `TODO` Добавить настройки, storage migration, IPC validation и понятную health check ошибку.
-- [ ] `TODO` Добавить unit checks для URL normalization, auth, SSE, provider separation и отсутствия двойного fallback.
-- [ ] `TODO` Выполнить локальный smoke: text streaming; затем отдельно vision/STT только если они входят в подтверждённый scope.
+- [x] `DONE` Добавить минимальный OpenAI-compatible request adapter без новой SDK-зависимости.
+- [x] `DONE` Добавить настройки, storage migration, IPC validation и понятную ошибку недоступности gateway.
+- [x] `DONE` Добавить unit checks для URL normalization, auth, request contract, provider separation и отсутствия двойного fallback.
+- [ ] `IN_PROGRESS` Выполнить локальный smoke: остановленный gateway проверен; text streaming ожидает запущенный OmniRoute.
 
 ## Критерии приёмки первого этапа
 
@@ -139,12 +139,23 @@ omnirouteTextModel = "auto"
 - `npm run package`
 - Ручной smoke с локальным OmniRoute: `GET /v1/models`, text streaming, остановленный gateway.
 
-## Открытые вопросы
+## Подтверждённые решения
 
-1. Первый этап: только text (рекомендуется) или сразу text + screenshots + STT?
-2. OmniRoute выбирается явно как provider (рекомендуется) или становится автоматическим fallback для Groq?
-3. Использовать `auto`, отдельный пользовательский combo или фиксированную модель?
-4. Управление upstream keys остаётся только в OmniRoute (рекомендуется) или Groq keys продолжают дублироваться в Cheating Helper?
+1. Первый этап: только text.
+2. OmniRoute выбирается явно и не становится fallback для Groq.
+3. Default model/combo: `auto`; пользователь может указать другой ID.
+4. OmniRoute upstream credentials управляются самим OmniRoute. Существующие Groq keys остаются в Cheating Helper только для direct Groq, STT и Groq Vision.
+
+## Результат реализации и проверки
+
+- Checkpoint предыдущей работы: commit `67b3146`, опубликован в `origin/codex/question-and-hr-responses`.
+- Реализация ведётся в отдельной ветке `codex/omniroute-text-provider`.
+- Добавлены явный provider selector, base URL, model/combo и optional gateway token.
+- OmniRoute text path использует существующие compiled prompt, history и renderer SSE events.
+- OmniRoute path не вызывает Groq model/key fallback и не читает Groq rate-limit headers.
+- `test/*.test.js`: все тесты прошли, включая `test/omniroute.test.js`.
+- `npm.cmd run package`: Windows x64 package успешно собран.
+- `GET http://127.0.0.1:20128/v1/models`: connection refused; локальный OmniRoute во время проверки не был запущен.
 
 ## Проверка состояния репозитория перед реализацией
 
