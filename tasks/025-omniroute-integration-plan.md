@@ -120,7 +120,8 @@ omnirouteTextModel = "auto"
 - [x] `DONE` Добавить минимальный OpenAI-compatible request adapter без новой SDK-зависимости.
 - [x] `DONE` Добавить настройки, storage migration, IPC validation и понятную ошибку недоступности gateway.
 - [x] `DONE` Добавить unit checks для URL normalization, auth, request contract, provider separation и отсутствия двойного fallback.
-- [ ] `IN_PROGRESS` Выполнить локальный smoke: остановленный gateway проверен; text streaming ожидает запущенный OmniRoute.
+- [x] `DONE` Выполнить локальный smoke: остановленный gateway, каталог моделей, содержательный SSE и parser приложения проверены.
+- [ ] `BLOCKED` Решить, оставить ли `auto` default после подтверждённого пустого ответа OmniRoute 3.8.48 или использовать рабочий `oc/deepseek-v4-flash-free`.
 
 ## Критерии приёмки первого этапа
 
@@ -155,7 +156,12 @@ omnirouteTextModel = "auto"
 - OmniRoute path не вызывает Groq model/key fallback и не читает Groq rate-limit headers.
 - `test/*.test.js`: все тесты прошли, включая `test/omniroute.test.js`.
 - `npm.cmd run package`: Windows x64 package успешно собран.
-- `GET http://127.0.0.1:20128/v1/models`: connection refused; локальный OmniRoute во время проверки не был запущен.
+- OmniRoute 3.8.48 установлен как Docker container `omniroute`; API доступен только на `127.0.0.1:20128`, persistent data находятся в `D:\OmniRoute\data`.
+- `GET /v1/models`: HTTP 200, возвращено 99 моделей/маршрутов.
+- `auto` и `auto/best-free`: HTTP 200 и `[DONE]`, но без content; gateway выбрал `aug/claude-sonnet-4.6*`.
+- `oc/deepseek-v4-flash-free`: HTTP 200, содержательный SSE `OMNIROUTE_OK`.
+- Реальный SSE обработан `createSseParser` + `readGroqSseEvent` из приложения: `APP_PARSER_OK`.
+- Контейнер опубликован только на localhost и не настроен на автоматический restart.
 
 ## Проверка состояния репозитория перед реализацией
 
