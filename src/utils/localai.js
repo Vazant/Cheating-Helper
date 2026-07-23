@@ -3,6 +3,7 @@ const { getSystemPrompt } = require('./prompts');
 const { sendToRenderer, initializeNewSession, saveConversationTurn } = require('./gemini');
 const { hasVisionCapability } = require('./vision');
 const { getLanguageConfig } = require('./aiProfiles');
+const { createResponseId, createResponsePayload, createResponseUpdate } = require('./responsePayload');
 
 // ── State ──
 
@@ -237,12 +238,16 @@ async function sendToOllama(transcription) {
 
         let fullText = '';
         let isFirst = true;
+        const responseId = createResponseId();
 
         for await (const part of response) {
             const token = part.message?.content || '';
             if (token) {
                 fullText += token;
-                sendToRenderer(isFirst ? 'new-response' : 'update-response', fullText);
+                sendToRenderer(
+                    isFirst ? 'new-response' : 'update-response',
+                    isFirst ? createResponsePayload(fullText, transcription, responseId) : createResponseUpdate(fullText, responseId)
+                );
                 isFirst = false;
             }
         }
@@ -430,12 +435,16 @@ async function sendLocalImage(base64Data, prompt, { host, model, systemPrompt } 
 
         let fullText = '';
         let isFirst = true;
+        const responseId = createResponseId();
 
         for await (const part of response) {
             const token = part.message?.content || '';
             if (token) {
                 fullText += token;
-                sendToRenderer(isFirst ? 'new-response' : 'update-response', fullText);
+                sendToRenderer(
+                    isFirst ? 'new-response' : 'update-response',
+                    isFirst ? createResponsePayload(fullText, '', responseId) : createResponseUpdate(fullText, responseId)
+                );
                 isFirst = false;
             }
         }

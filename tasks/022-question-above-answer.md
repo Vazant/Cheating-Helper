@@ -1,6 +1,6 @@
 # 022 — Показывать исходный вопрос над ответом
 
-Статус: `TODO`
+Статус: `IN_PROGRESS`
 
 Зависимости: `012`, `018`, `019`, `021`.
 
@@ -42,13 +42,23 @@
 
 ## Подзадачи после подтверждения
 
-1. `TODO` Расширить payload первого streamed response для Hosted Groq, Local Ollama и Cloud так, чтобы он содержал `question` и `answer`.
-2. `TODO` Нормализовать старые строковые payload в `CheatingDaddyApp`, сохранив корректное отображение ошибок и служебных сообщений.
-3. `TODO` Перевести live `responses` на связанные элементы и безопасно обновлять только последний ответ при streaming.
-4. `TODO` Добавить в `AssistantView` компактный блок вопроса над ответом и сохранить выделение/копирование текста.
-5. `TODO` Проверить ручной текст, voice transcript, streaming, несколько ответов и навигацию.
-6. `TODO` Добавить минимальный dependency-free тест контракта payload и UI-связки.
-7. `TODO` Выполнить syntax/tests/diff/package и ручной Windows smoke.
+1. `DONE` Расширить payload первого streamed response для Hosted Groq, Local Ollama и Cloud так, чтобы он содержал `question` и `answer`.
+2. `DONE` Нормализовать старые строковые payload в `CheatingDaddyApp`, сохранив корректное отображение ошибок и служебных сообщений.
+3. `DONE` Перевести live `responses` на связанные элементы с `id`; streaming обновляет свой ответ, а не случайный последний элемент.
+4. `DONE` Добавить в `AssistantView` компактный выделяемый блок вопроса над ответом.
+5. `DONE` Покрыть контракт ручного текста, voice transcript, streaming ID и отсутствие question у vision payload статическими и dependency-free проверками.
+6. `DONE` Добавить `test/responsePresentation.test.js`.
+7. `IN_PROGRESS` Syntax/tests/diff/package прошли; ручной Windows smoke не выполнен из-за timeout системного разрешения на запуск свежего EXE.
+
+## Результат проверки 2026-07-20
+
+- `node test/responsePresentation.test.js` — passed.
+- Profile, storage, speech capture, audio, Groq, vision и renderer bootstrap tests — passed.
+- Syntax checks затронутых app/view/provider/storage файлов — passed.
+- `git diff --check` — passed.
+- `npm.cmd run package` — Windows x64 package completed.
+- `BLOCKED` Prettier отсутствует локально, а `npx` не смог создать системный npm cache (`EPERM`); `git diff --check` чистый.
+- `BLOCKED` Только ручной smoke реального typed/voice turn: системное разрешение Computer Use на запуск EXE истекло; API-квота без пользовательского запроса не расходовалась.
 
 ## Критерии приёмки
 
@@ -76,4 +86,4 @@
 
 ## Требуется решение пользователя
 
-Для анализа скриншота: показывать над ответом фактически отправленный `screenAnalysisPrompt` как вопрос или оставлять vision-ответ без строки вопроса? Рекомендация для первого этапа — оставлять без строки вопроса, потому что пользователь не вводил этот текст и длинный скрытый prompt будет загромождать окно.
+Решено: vision-ответ остаётся без строки вопроса, потому что пользователь не вводил внутренний `screenAnalysisPrompt` и его показ загромождал бы окно.

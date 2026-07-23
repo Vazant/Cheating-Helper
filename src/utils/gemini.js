@@ -16,6 +16,7 @@ const { connectCloud, sendCloudAudio, sendCloudText, sendCloudImage, closeCloud,
 const { GROQ_VISION_MODEL, buildVisionPrompt } = require('./vision');
 const { getLanguageConfig } = require('./aiProfiles');
 const { createSpeechSegmenter, encodePcm16Wav } = require('./audioPipeline');
+const { createResponseId, createResponsePayload, createResponseUpdate } = require('./responsePayload');
 const {
     getGroqFallbackOrder,
     readGroqRateLimits,
@@ -405,6 +406,8 @@ async function sendToGroq(transcription) {
         return false;
     }
 
+    const responseId = createResponseId();
+
     const models = getGroqFallbackOrder(currentGroqSession?.model);
 
     const userTurn = {
@@ -571,7 +574,10 @@ async function sendToGroq(transcription) {
             const displayText = stripThinkingTags(fullText);
             const now = Date.now();
             if (displayText && (isFirst || now - lastRenderAt >= 40)) {
-                sendToRenderer(isFirst ? 'new-response' : 'update-response', displayText);
+                sendToRenderer(
+                    isFirst ? 'new-response' : 'update-response',
+                    isFirst ? createResponsePayload(displayText, transcription, responseId) : createResponseUpdate(displayText, responseId)
+                );
                 isFirst = false;
                 lastRenderAt = now;
                 lastRenderedText = displayText;
@@ -600,7 +606,11 @@ async function sendToGroq(transcription) {
             sendToRenderer('update-status', `Groq returned no response content (${model})`);
             return false;
         }
-        if (cleanedResponse !== lastRenderedText) sendToRenderer(isFirst ? 'new-response' : 'update-response', cleanedResponse);
+        if (cleanedResponse !== lastRenderedText)
+            sendToRenderer(
+                isFirst ? 'new-response' : 'update-response',
+                isFirst ? createResponsePayload(cleanedResponse, transcription, responseId) : createResponseUpdate(cleanedResponse, responseId)
+            );
         const streamDoneAt = Date.now();
         console.log(
             '[Groq latency]',
@@ -619,7 +629,7 @@ async function sendToGroq(transcription) {
         saveConversationTurn(transcription, cleanedResponse);
 
         if (finishReason === 'length') {
-            sendToRenderer('update-response', `${cleanedResponse}\n\n_Response stopped because the token limit was reached._`);
+            sendToRenderer('update-response', createResponseUpdate(`${cleanedResponse}\n\n_Response stopped because the token limit was reached._`, responseId));
             sendToRenderer('update-status', 'Groq response stopped at the token limit');
             return true;
         }
@@ -674,7 +684,7 @@ async function sendGroqImage(base64Data, prompt) {
             const text = body.choices?.[0]?.message?.content?.trim();
             if (!text) return { success: false, error: 'Groq Vision returned an empty response' };
             activateGroqApiKey(groqApiKeys[keyIndex]);
-            sendToRenderer('new-response', text);
+            sendToRenderer('new-response', createResponsePayload(text));
             return { success: true, text, model: GROQ_VISION_MODEL };
         }
 
@@ -737,12 +747,16 @@ async function sendToGemma(transcription) {
 
         let fullText = '';
         let isFirst = true;
+        const responseId = createResponseId();
 
         for await (const chunk of response) {
             const chunkText = chunk.text;
             if (chunkText) {
                 fullText += chunkText;
-                sendToRenderer(isFirst ? 'new-response' : 'update-response', fullText);
+                sendToRenderer(
+                    isFirst ? 'new-response' : 'update-response',
+                    isFirst ? createResponsePayload(fullText, transcription, responseId) : createResponseUpdate(fullText, responseId)
+                );
                 isFirst = false;
             }
         }
@@ -1146,12 +1160,16 @@ async function sendImageToGeminiHttp(base64Data, prompt) {
         // Stream the response
         let fullText = '';
         let isFirst = true;
+        const responseId = createResponseId();
         for await (const chunk of response) {
             const chunkText = chunk.text;
             if (chunkText) {
                 fullText += chunkText;
                 // Send to renderer - new response for first chunk, update for subsequent
-                sendToRenderer(isFirst ? 'new-response' : 'update-response', fullText);
+                sendToRenderer(
+                    isFirst ? 'new-response' : 'update-response',
+                    isFirst ? createResponsePayload(fullText, '', responseId) : createResponseUpdate(fullText, responseId)
+                );
                 isFirst = false;
             }
         }

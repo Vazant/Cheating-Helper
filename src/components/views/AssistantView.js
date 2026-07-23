@@ -159,6 +159,30 @@ export class AssistantView extends LitElement {
             background: #444444;
         }
 
+        .question-container {
+            flex-shrink: 0;
+            max-height: 96px;
+            overflow-y: auto;
+            padding: var(--space-sm) var(--space-md);
+            border-bottom: 1px solid var(--border);
+            background: var(--bg-surface);
+            color: var(--text-secondary);
+            font-size: var(--font-size-sm);
+            line-height: var(--line-height);
+            user-select: text;
+            cursor: text;
+        }
+
+        .question-label {
+            display: block;
+            margin-bottom: 3px;
+            color: var(--text-muted);
+            font-family: var(--font-mono);
+            font-size: var(--font-size-xs);
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+        }
+
         /* ── Response navigation strip ── */
 
         .response-nav {
@@ -332,9 +356,14 @@ export class AssistantView extends LitElement {
 
     getCurrentResponse() {
         const profileNames = this.getProfileNames();
-        return this.responses.length > 0 && this.currentResponseIndex >= 0
-            ? this.responses[this.currentResponseIndex]
-            : `Listening to your ${profileNames[this.selectedProfile] || 'session'}...`;
+        if (!this.responses.length || this.currentResponseIndex < 0) return `Listening to your ${profileNames[this.selectedProfile] || 'session'}...`;
+        const item = this.responses[this.currentResponseIndex];
+        return typeof item === 'string' ? item : item?.answer || '';
+    }
+
+    getCurrentQuestion() {
+        const item = this.responses.length > 0 && this.currentResponseIndex >= 0 ? this.responses[this.currentResponseIndex] : null;
+        return item && typeof item === 'object' && typeof item.question === 'string' ? item.question : '';
     }
 
     renderMarkdown(content) {
@@ -666,8 +695,12 @@ export class AssistantView extends LitElement {
 
     render() {
         const hasMultipleResponses = this.responses.length > 1;
+        const question = this.getCurrentQuestion();
 
         return html`
+            ${question
+                ? html`<div class="question-container"><span class="question-label">Question</span>${question}</div>`
+                : ''}
             <div class="response-container" id="responseContainer"></div>
 
             ${hasMultipleResponses ? html`

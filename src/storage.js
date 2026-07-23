@@ -5,6 +5,7 @@ const { DEFAULT_GROQ_MODEL, GROQ_MODELS } = require('./utils/groq');
 const { GROQ_VISION_MODEL, DEFAULT_OLLAMA_VISION_MODEL, DEFAULT_SCREEN_ANALYSIS_PROMPT, normalizeVisionProvider } = require('./utils/vision');
 const { PROFILE_SCHEMA_VERSION, SENIOR_JAVA_PROFILE, importProfile, normalizeProfile, normalizeUserProfiles } = require('./utils/aiProfiles');
 const { getAvailableProfiles } = require('./utils/prompts');
+const EPAM_HR_PROFILE_V2 = normalizeProfile(require('../profiles/epam-hr-call.json').profile);
 
 const CONFIG_VERSION = 1;
 const HOSTED_TEXT_MODELS = new Set(GROQ_MODELS);
@@ -86,7 +87,7 @@ const DEFAULT_PREFERENCES = {
 const DEFAULT_PROFILE_STORE = {
     schemaVersion: PROFILE_SCHEMA_VERSION,
     userProfiles: [SENIOR_JAVA_PROFILE],
-    migrations: { customPromptV1: { done: false, profileId: null } },
+    migrations: { customPromptV1: { done: false, profileId: null }, epamHrProfileV2: { done: false, updated: false } },
 };
 
 const DEFAULT_KEYBINDS = null; // null means use system defaults
@@ -228,6 +229,7 @@ function initializeStorage() {
     // Drop accidental availableProfiles blob from older updatePreference writes
     persistPreferences(getPreferences());
     migrateLegacyCustomPrompt();
+    migrateEpamHrProfileV2();
 }
 
 // ============ CONFIG ============
@@ -372,6 +374,10 @@ function getProfileStore() {
                 done: saved.migrations?.customPromptV1?.done === true,
                 profileId: typeof saved.migrations?.customPromptV1?.profileId === 'string' ? saved.migrations.customPromptV1.profileId : null,
             },
+            epamHrProfileV2: {
+                done: saved.migrations?.epamHrProfileV2?.done === true,
+                updated: saved.migrations?.epamHrProfileV2?.updated === true,
+            },
         },
     };
 }
@@ -484,6 +490,15 @@ function migrateLegacyCustomPrompt() {
     store.migrations.customPromptV1 = { done: true, profileId };
     if (!setProfileStore(store)) return;
     if (profileId) setPreferences({ selectedProfile: profileId, customPrompt: '' });
+}
+
+function migrateEpamHrProfileV2() {
+    const store = getProfileStore();
+    if (store.migrations.epamHrProfileV2.done) return;
+    const index = store.userProfiles.findIndex(profile => profile.id === EPAM_HR_PROFILE_V2.id);
+    if (index >= 0) store.userProfiles[index] = EPAM_HR_PROFILE_V2;
+    store.migrations.epamHrProfileV2 = { done: true, updated: index >= 0 };
+    setProfileStore(store);
 }
 
 // ============ KEYBINDS ============

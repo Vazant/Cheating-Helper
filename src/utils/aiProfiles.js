@@ -32,7 +32,7 @@ const LANGUAGE_NAMES = {
 
 const LENGTH_INSTRUCTIONS = {
     auto: 'Adapt length to the question. Use 4-6 sentences for a simple non-technical answer, 10-18 for a technical concept, and 15-30 for a comparison, under-the-hood explanation, or system-design question. Complete every relevant point without repetitive padding.',
-    concise: 'Answer in about 4-6 sentences while preserving the essential mechanism, example, and caveat.',
+    concise: 'Match the length to the intent: 1-2 sentences for greetings and small talk, 1-3 for a simple factual answer, and about 3-6 only when an explanation is needed. Never add unrelated background just to reach a sentence count.',
     standard: 'Answer in about 10-18 sentences with mechanism, example, pitfalls, and trade-offs.',
     detailed: 'Answer in about 18-30 sentences, split into several meaningful paragraphs, with internals, example, pitfalls, alternatives, and trade-offs.',
 };

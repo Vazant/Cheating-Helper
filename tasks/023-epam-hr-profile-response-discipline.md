@@ -1,6 +1,6 @@
 # 023 — Исправить естественность и стабильность EPAM HR Call
 
-Статус: `TODO`
+Статус: `IN_PROGRESS`
 
 Зависимость: `020`.
 
@@ -63,14 +63,45 @@ Provider, model IDs, язык, history budget, key rotation и fallback не м�
 - При очевидной STT-ошибке выбирать наиболее вероятный HR-смысл только когда он однозначен; иначе задавать короткий уточняющий вопрос.
 - Не придумывать новые причины, достижения или детали ради разнообразия формулировок.
 
+### 6. Tell me about yourself
+
+Для HR-звонка не использовать полный хронологический рассказ обо всех проектах и не выдавать отдельный список технологий. Ответ длительностью 60–90 секунд строится так:
+
+1. Имя, текущая специализация, локация и почти 7 лет опыта.
+2. Основной стек одной короткой группой: Java, Spring Boot, REST, persistence/database и delivery tooling.
+3. Два доказательства опыта: Alanda — автоматизация и ускорение примерно на 60%; Carlsberg — надёжная миграция около 5 TB из AEM в AWS.
+4. Тип ответственности, который нравится: end-to-end backend, сложные integrations и production reliability.
+5. Короткое завершение: senior role, рост, более широкая ответственность и международные проекты.
+
+Не включать в этот ответ подробности Cookiecutter/ChatGPT flow, throttling, XML parser, Smalltalk dependency graph и все остальные проекты одновременно. Эти детали сохраняются для follow-up вопросов. Названия технологий используются как подтверждение опыта, а не как длинный перечень ключевых слов.
+
+Предоставленный пользователем длинный вариант полезен как банк фактов и заготовка для follow-ups, но не как единый ответ HR: он содержит несколько самостоятельных STAR/project stories и занимает значительно больше целевых 60–90 секунд.
+
+Новые факты `Chrome extension`, `AudienceRate take-home` и `mentoring through code reviews` не переносятся в User Context до отдельного подтверждения пользователя.
+
+### 7. Почему в CV нет более новых проектов
+
+Подтверждено пользователем: работа продолжалась, но часть более свежих задач не была включена в CV, потому что Java не являлась там основной технологией. Среди таких обязанностей были Jaspersoft, настройка BPMN workflows и другая работа. При прямом вопросе профиль должен объяснять это как сознательную фокусировку CV на релевантном Java backend опыте, а не как перерыв в работе. В обычную самопрезентацию это объяснение не добавляется.
+
 ## Минимальный план после подтверждения
 
-1. `TODO` Переписать `persona`, `answerRules` и `responseStyle` в `profiles/epam-hr-call.json`, разделив small talk, job-change motivation, Why EPAM, factual и behavioral вопросы.
-2. `TODO` Уточнить общий `concise` preset: 1–2 предложения для greetings, до 3 для простого фактического ответа, 3–6 только когда вопрос требует объяснения.
-3. `TODO` Добавить в profile test проверки обязательных правил: small talk без CV pitch, отдельная canonical job-change position и запрет смешивать её с Why EPAM.
-4. `TODO` Проверить размер compiled prompt и отсутствие конфликтующих инструкций.
-5. `TODO` Импортировать обновлённый JSON как новую версию пользовательского профиля либо обновить существующую запись безопасным способом после выбора пользователя.
-6. `TODO` Выполнить profile/Groq/storage tests, syntax check и `git diff --check`.
+1. `DONE` Переписать `persona`, `answerRules` и `responseStyle` в `profiles/epam-hr-call.json`, разделив small talk, job-change motivation, Why EPAM, factual и behavioral вопросы.
+2. `DONE` Уточнить общий `concise` preset: 1–2 предложения для greetings, до 3 для простого фактического ответа, 3–6 только когда вопрос требует объяснения.
+3. `DONE` Добавить в profile test проверки обязательных правил: small talk без CV pitch, отдельная canonical job-change position и запрет смешивать её с Why EPAM.
+4. `DONE` Проверить размер compiled prompt и отсутствие конфликтующих инструкций.
+5. `DONE` Добавить одноразовую storage migration, которая автоматически заменяет только существующий профиль с точным ID `profile_epam_hr_call`.
+6. `DONE` Выполнить profile/Groq/storage tests, syntax check, package и `git diff --check`.
+
+## Результат проверки 2026-07-20
+
+- После доработки `Tell me about yourself` compiled prompt занимает 6357 символов; JOB CHANGE и WHY EPAM разделены на независимые блоки.
+- `node test/profile.test.js` — passed.
+- `node test/storage.test.js` — passed, включая одноразовую замену старого HR-профиля.
+- Groq и остальные dependency-free regression tests — passed.
+- Syntax checks и `git diff --check` — passed.
+- `npm.cmd run package` — Windows x64 package completed.
+- `BLOCKED` Prettier отсутствует локально, а `npx` не смог создать системный npm cache (`EPERM`); `git diff --check` чистый.
+- `IN_PROGRESS` Нужен один ручной live smoke на реальной модели для фактических ответов `How are you?`, `Why change?` и `Why EPAM?`; без команды пользователя квота Groq не расходовалась.
 
 ## Критерии приёмки
 
@@ -84,4 +115,4 @@ Provider, model IDs, язык, history budget, key rotation и fallback не м�
 
 ## Требуется решение пользователя
 
-Подтвердить предложенную каноническую позицию о смене работы и способ обновления уже импортированного профиля: автоматически заменить профиль с ID `profile_epam_hr_call` или подготовить JSON для ручного повторного импорта.
+Решено: использовать предложенную каноническую позицию и автоматически один раз заменить существующий профиль с ID `profile_epam_hr_call`.

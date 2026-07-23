@@ -10,12 +10,33 @@ const configDir = path.join(tempHome, 'AppData', 'Roaming', 'cheating-daddy-conf
 fs.mkdirSync(configDir, { recursive: true });
 fs.writeFileSync(path.join(configDir, 'config.json'), JSON.stringify({ configVersion: 1 }), 'utf8');
 fs.writeFileSync(path.join(configDir, 'credentials.json'), JSON.stringify({ groqApiKey: 'legacy-key', unrelated: 'preserved' }), 'utf8');
+fs.writeFileSync(
+    path.join(configDir, 'profiles.json'),
+    JSON.stringify({
+        schemaVersion: 2,
+        userProfiles: [
+            {
+                id: 'profile_senior_java_interview',
+                name: 'Senior Java Interview',
+                prompt: { userContext: 'java facts', persona: 'java persona', answerRules: 'java rules', responseStyle: 'java style', length: 'detailed', format: 'teleprompter' },
+            },
+            {
+                id: 'profile_epam_hr_call',
+                name: 'EPAM HR Call',
+                prompt: { userContext: 'old facts', persona: 'old persona', answerRules: 'old rules', responseStyle: 'old style', length: 'concise', format: 'teleprompter' },
+            },
+        ],
+        migrations: {},
+    }),
+    'utf8'
+);
 
 try {
     const storage = require('../src/storage');
     assert.strictEqual(storage.normalizeAudioMode('both'), 'speaker_only');
     assert.strictEqual(storage.normalizeAudioMode('mic_only'), 'mic_only');
     storage.initializeStorage();
+    assert.ok(storage.getAiProfile('profile_epam_hr_call').prompt.answerRules.includes("Why are you changing jobs?"));
     assert.deepStrictEqual(storage.getGroqApiKeys(), ['legacy-key']);
     assert.strictEqual(storage.getCredentials().unrelated, 'preserved');
 

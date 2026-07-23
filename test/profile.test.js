@@ -74,6 +74,20 @@ assert.strictEqual(epamProfile.prompt.format, 'teleprompter');
 assert.ok(epamPrompt.includes('around PLN 16,000 per month'));
 assert.ok(epamPrompt.includes('renewal application is being processed'));
 assert.ok(epamPrompt.includes('Always reply in English'));
+assert.ok(epamPrompt.includes("Greetings, thanks and 'How are you?' get 1-2 natural sentences"));
+assert.ok(epamPrompt.includes("Keep 'Why are you changing jobs?' separate from 'Why EPAM?'"));
+assert.ok(epamPrompt.includes('Rephrased questions must preserve the same facts and core position'));
+assert.ok(epamPrompt.includes('Never add unrelated background just to reach a sentence count'));
+assert.ok(epamPrompt.includes('JOB CHANGE:'));
+assert.ok(epamPrompt.includes('WHY EPAM:'));
+assert.ok(epamPrompt.includes('give a 60-90 second recruiter introduction in this order'));
+assert.ok(epamPrompt.includes('two proof points only'));
+assert.ok(epamPrompt.includes('Do not include every project'));
+assert.ok(epamPrompt.includes('Do not mention Chrome extensions or the AudienceRate assignment'));
+assert.ok(epamPrompt.includes('CV SCOPE:'));
+assert.ok(epamPrompt.includes('This is a CV selection decision, not a period without work'));
+assert.ok(epamPrompt.includes('omitted Jaspersoft, BPMN configuration and other non-Java-primary responsibilities'));
+assert.ok(epamPrompt.includes('Never imply unemployment, inactivity or an attempt to hide work'));
 
 const uiSource = fs.readFileSync(require.resolve('../src/components/views/AICustomizeView'), 'utf8');
 for (const removed of ['Expertise / Coverage', 'Length Override', 'Format Override', 'Search Policy', '>Advanced<'])

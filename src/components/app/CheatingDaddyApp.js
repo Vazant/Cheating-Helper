@@ -528,9 +528,19 @@ export class CheatingDaddyApp extends LitElement {
         }
     }
 
+    normalizeResponse(response) {
+        if (typeof response === 'string') return { id: null, question: '', answer: response };
+        if (!response || typeof response !== 'object') return { id: null, question: '', answer: '' };
+        return {
+            id: typeof response.id === 'string' ? response.id : null,
+            question: typeof response.question === 'string' ? response.question.trim() : '',
+            answer: typeof response.answer === 'string' ? response.answer : '',
+        };
+    }
+
     addNewResponse(response) {
         const wasOnLatest = this.currentResponseIndex === this.responses.length - 1;
-        this.responses = [...this.responses, response];
+        this.responses = [...this.responses, this.normalizeResponse(response)];
         if (wasOnLatest || this.currentResponseIndex === -1) {
             this.currentResponseIndex = this.responses.length - 1;
         }
@@ -539,11 +549,26 @@ export class CheatingDaddyApp extends LitElement {
     }
 
     updateCurrentResponse(response) {
-        if (this.responses.length > 0) {
-            this.responses = [...this.responses.slice(0, -1), response];
-        } else {
+        if (!this.responses.length) {
             this.addNewResponse(response);
+            return;
         }
+
+        const update = this.normalizeResponse(response);
+        const matchingIndex = update.id ? this.responses.findIndex(item => item.id === update.id) : -1;
+        if (update.id && matchingIndex < 0) {
+            this.addNewResponse(update);
+            return;
+        }
+        const targetIndex = matchingIndex >= 0 ? matchingIndex : this.responses.length - 1;
+        const current = this.normalizeResponse(this.responses[targetIndex]);
+        const next = [...this.responses];
+        next[targetIndex] = {
+            id: update.id || current.id,
+            question: update.question || current.question,
+            answer: update.answer,
+        };
+        this.responses = next;
         this.requestUpdate();
     }
 
