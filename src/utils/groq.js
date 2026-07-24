@@ -91,6 +91,35 @@ function getNextGroqKeyIndex(status, currentIndex, keyCount) {
     return status === 429 && currentIndex + 1 < keyCount ? currentIndex + 1 : null;
 }
 
+function createGroqKeyActivationCoordinator(activateKey) {
+    let nextRequestOrder = 0;
+    let lastActivatedOrder = 0;
+
+    return {
+        begin(isActive) {
+            return { order: ++nextRequestOrder, activated: false, isActive };
+        },
+        activate(key, request) {
+            if (
+                !request ||
+                request.activated ||
+                request.order < lastActivatedOrder ||
+                (typeof request.isActive === 'function' && !request.isActive())
+            ) {
+                return false;
+            }
+            if (!activateKey(key)) return false;
+            request.activated = true;
+            lastActivatedOrder = request.order;
+            return true;
+        },
+        reset() {
+            nextRequestOrder = 0;
+            lastActivatedOrder = 0;
+        },
+    };
+}
+
 function formatGroqRateLimits(rateLimits) {
     const parts = [];
     for (const [label, metric] of [
@@ -278,6 +307,7 @@ module.exports = {
     isNearRateLimit,
     getGroqFallbackDecision,
     getNextGroqKeyIndex,
+    createGroqKeyActivationCoordinator,
     formatGroqRateLimits,
     getGroqErrorStatus,
     estimateTextTokens,

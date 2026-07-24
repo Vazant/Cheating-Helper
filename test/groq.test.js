@@ -10,6 +10,7 @@ const {
     isNearRateLimit,
     getGroqFallbackDecision,
     getNextGroqKeyIndex,
+    createGroqKeyActivationCoordinator,
     getGroqErrorStatus,
     estimateTextTokens,
     buildGroqRequestPlan,
@@ -70,6 +71,14 @@ for (const status of [401, 403, 429, 500, 503]) assert.strictEqual(getGroqFallba
 assert.strictEqual(getNextGroqKeyIndex(429, 0, 3), 1);
 assert.strictEqual(getNextGroqKeyIndex(429, 2, 3), null);
 for (const status of [200, 401, 403, 404, 413, 500, 503]) assert.strictEqual(getNextGroqKeyIndex(status, 0, 3), null);
+const activatedKeys = [];
+const keyCoordinator = createGroqKeyActivationCoordinator(key => activatedKeys.push(key) > 0);
+const olderKeyRequest = keyCoordinator.begin(() => true);
+const newerKeyRequest = keyCoordinator.begin(() => true);
+assert.strictEqual(keyCoordinator.activate('newer', newerKeyRequest), true);
+assert.strictEqual(keyCoordinator.activate('older', olderKeyRequest), false);
+assert.strictEqual(keyCoordinator.activate('newer-again', newerKeyRequest), false);
+assert.deepStrictEqual(activatedKeys, ['newer']);
 
 const status429 = getGroqErrorStatus(429, DEFAULT_GROQ_MODEL, limits, 'limited');
 for (const detail of ['RPD 50/1000 remaining', 'RPD reset 2h', 'TPM 399/8000 remaining', 'retry-after 3']) assert.ok(status429.includes(detail));
@@ -149,7 +158,7 @@ assert.ok(geminiSource.includes("ipcMain.handle('initialize-gemini', async () =>
 assert.ok(geminiSource.includes('Gemini initialization is temporarily disabled'));
 assert.ok(geminiSource.includes('getGroqTextRequestOptions(model, requestPlan.maxCompletionTokens)'));
 assert.ok(geminiSource.includes('getGroqVisionRequestOptions()'));
-assert.ok(geminiSource.includes('activateGroqApiKey(groqApiKey)'));
+assert.ok(geminiSource.includes('createGroqKeyActivationCoordinator(activateGroqApiKey)'));
 assert.ok(geminiSource.includes("finishReason === 'length'"));
 assert.ok(!sendToGroqSource.includes('selectedProfile'));
 assert.ok(geminiSource.includes('profile: { id: selectedProfile.id, name: selectedProfile.name }'));

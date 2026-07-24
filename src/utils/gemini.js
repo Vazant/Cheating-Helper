@@ -26,6 +26,7 @@ const {
     isNearRateLimit,
     getGroqFallbackDecision,
     getNextGroqKeyIndex,
+    createGroqKeyActivationCoordinator,
     getGroqErrorStatus,
     buildGroqRequestPlan,
     readGroqSseEvent,
@@ -59,6 +60,7 @@ let groqTextQueue = Promise.resolve();
 let hostedUtteranceId = 0;
 const pendingUtteranceIds = new Set();
 const hostedRequestScope = createAbortScope();
+const groqKeyActivation = createGroqKeyActivationCoordinator(activateGroqApiKey);
 let groqRequestMetrics = [];
 
 function getAiProfileSnapshot(id) {
@@ -160,6 +162,7 @@ function initializeNewSession(profile = null, customPrompt = null, metadata = {}
     conversationHistory = [];
     screenAnalysisHistory = [];
     groqConversationHistory = [];
+    groqKeyActivation.reset();
     groqRequestMetrics = [];
     groqLimitWarnings.clear();
     currentProfile = profile;
@@ -352,6 +355,7 @@ async function transcribeGroqAudio(wavBuffer, language, requestContext) {
     if (!isHostedRequestActive(requestContext)) return { success: false, aborted: true };
     const requestId = createResponseId();
     const requestStartedAt = Date.now();
+    const keyActivationRequest = groqKeyActivation.begin(() => isHostedRequestActive(requestContext));
     const model = 'whisper-large-v3-turbo';
     const recordMetric = (keySlot, status, details = {}) =>
         recordGroqMetric({
@@ -399,7 +403,7 @@ async function transcribeGroqAudio(wavBuffer, language, requestContext) {
                 recordMetric(keyIndex + 1, 'empty-transcript', { rateLimits });
                 return { success: false, error: 'Groq STT returned an empty transcript' };
             }
-            activateGroqApiKey(groqApiKeys[keyIndex]);
+            groqKeyActivation.activate(groqApiKeys[keyIndex], keyActivationRequest);
             recordMetric(keyIndex + 1, 'success', { rateLimits });
             return { success: true, text };
         }
@@ -485,6 +489,7 @@ async function sendToGroq(transcription, requestContext = getHostedRequestContex
     }
 
     const responseId = createResponseId();
+    const keyActivationRequest = groqKeyActivation.begin(() => isHostedRequestActive(requestContext));
 
     const models = getGroqFallbackOrder(currentGroqSession?.model);
 
@@ -655,8 +660,6 @@ async function sendToGroq(transcription, requestContext = getHostedRequestContex
             removeUserTurn();
             return false;
         }
-        activateGroqApiKey(groqApiKey);
-
         const reader = response.body?.getReader();
         if (!reader) {
             removeUserTurn();
@@ -772,6 +775,7 @@ async function sendToGroq(transcription, requestContext = getHostedRequestContex
             streamMs: streamDoneAt - (firstContentAt || headersReceivedAt),
             totalMs: streamDoneAt - requestReceivedAt,
         };
+        groqKeyActivation.activate(groqApiKey, keyActivationRequest);
         console.log('[Groq latency]', JSON.stringify({ model, keySlot: keyIndex + 1, ...timings }));
         recordAttempt(model, keyIndex + 1, 'success', {
             finishReason: finishReason || 'stop',
@@ -806,6 +810,7 @@ async function sendGroqImage(base64Data, prompt, requestContext = getHostedReque
     if (!isHostedRequestActive(requestContext)) return { success: false, aborted: true };
     const requestId = createResponseId();
     const requestStartedAt = Date.now();
+    const keyActivationRequest = groqKeyActivation.begin(() => isHostedRequestActive(requestContext));
     const recordMetric = (keySlot, status, details = {}) =>
         recordGroqMetric({
             requestId,
@@ -863,7 +868,7 @@ async function sendGroqImage(base64Data, prompt, requestContext = getHostedReque
                 recordMetric(keyIndex + 1, 'empty-response', { rateLimits });
                 return { success: false, error: 'Groq Vision returned an empty response' };
             }
-            activateGroqApiKey(groqApiKeys[keyIndex]);
+            groqKeyActivation.activate(groqApiKeys[keyIndex], keyActivationRequest);
             recordMetric(keyIndex + 1, 'success', {
                 finishReason: body.choices?.[0]?.finish_reason || null,
                 rateLimits,

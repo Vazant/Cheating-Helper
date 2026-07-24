@@ -574,10 +574,7 @@ export class MainView extends LitElement {
     async _loadFromStorage() {
         try {
             const storageApi = window.cheatingDaddy.storage;
-            const [prefs, creds] = await Promise.all([
-                storageApi.getPreferences(),
-                storageApi.getCredentials().catch(() => ({})),
-            ]);
+            const [prefs, creds] = await Promise.all([storageApi.getPreferences(), storageApi.getCredentials().catch(() => ({}))]);
 
             const storedMode = prefs.providerMode || 'byok';
             this._mode = storedMode === 'cloud' ? 'byok' : storedMode;
@@ -937,7 +934,10 @@ export class MainView extends LitElement {
                 <div class="form-hint">
                     <span class="link" @click=${() => this.onExternalLink('https://console.groq.com/keys')}>Get Groq key</span>
                 </div>
-                <div class="form-hint warning">Stored locally without encryption. On quota error, the next key is tried once.</div>
+                <div class="form-hint warning">
+                    Stored locally without encryption. On quota error, the next key is tried once. Keys from the same Groq organization share that
+                    organization's quota; adding keys does not multiply it.
+                </div>
                 <div class="form-hint warning">Gemini is disabled. Choose Groq or Ollama screenshot analysis in Settings.</div>
             </div>
 
@@ -1030,8 +1030,8 @@ export class MainView extends LitElement {
                                   <button
                                       class="help-btn"
                                       @click=${() => {
-                            this._showLocalHelp = !this._showLocalHelp;
-                        }}
+                                          this._showLocalHelp = !this._showLocalHelp;
+                                      }}
                                   >
                                       ${this._showLocalHelp ? closeIcon : helpIcon}
                                   </button>
@@ -1120,9 +1120,9 @@ export class MainView extends LitElement {
                 <button
                     class="help-cloud-btn"
                     @click=${() => {
-                    this._showLocalHelp = false;
-                    this._saveMode('byok');
-                }}
+                        this._showLocalHelp = false;
+                        this._saveMode('byok');
+                    }}
                 >
                     Switch to BYOK
                 </button>

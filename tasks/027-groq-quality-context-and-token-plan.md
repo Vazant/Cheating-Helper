@@ -777,6 +777,8 @@ Evidence:
 
 ### Блок 8 — Детерминированные multiple-key attempts
 
+Статус блока: `IN_PROGRESS` — coordinator и delayed-order checks готовы; live parallel-role smoke заблокирован решением 9
+
 Предлагаемый commit: `fix: make Groq key activation deterministic`
 
 Scope:
@@ -806,6 +808,17 @@ Regression:
 Rollback:
 
 - Отдельный key coordination commit.
+
+Evidence:
+
+- Text, STT и Vision используют один session-scoped activation coordinator.
+- Каждый успешный request может активировать ключ не более одного раза.
+- Поздний completion более старого request не перезаписывает key, активированный более новым request.
+- Stop/Restart ownership запрещает позднюю activation, coordinator сбрасывается на новом Start.
+- Retry сохраняется только для 429, без wrap-around; 401/403/404/413/5xx/network не вращают ключи.
+- UI объясняет, что ключи одной Groq organization разделяют общую quota.
+- Key-coordination checks: 3/3 passed; полная регрессия: 37/37 tests passed.
+- Live delayed Text/STT/Vision parallel smoke: `BLOCKED` до отдельного разрешения live calls.
 
 ### Блок 9 — Длинные и быстрые audio questions
 
