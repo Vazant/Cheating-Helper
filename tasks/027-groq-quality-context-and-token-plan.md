@@ -972,6 +972,114 @@ Rollback:
 2. Максимальное число повторов/дневной token budget.
 3. Можно ли сохранять обезличенные usage/latency results в task evidence.
 
+## Обновление приоритета от 2026-07-24 — Online Groq first
+
+### Подтверждённое направление
+
+1. Основной и ближайший приоритет — качество работы с бесплатными hosted-моделями Groq.
+2. Локальные LLM, `llama.cpp`, `whisper.cpp`, Ollama replacement и native runtime исключены из текущего этапа.
+3. Не добавлять новый LLM-провайдер, пока текущие модели Groq не сравнены на одинаковых реальных сценариях.
+4. Не менять default model, reasoning, context count, sampling и fallback на основании общих benchmark или субъективного впечатления.
+5. Полный аудит приложения и исключённые идеи сохранены в `tasks/029-deferred-application-audit.md`.
+
+### Актуальная capability matrix
+
+Проверено по официальной документации Groq 2026-07-24.
+
+| Роль | Модель | Статус и назначение | Текущее решение |
+|---|---|---|---|
+| Hosted Text / качество | `openai/gpt-oss-120b` | Text, reasoning, около 500 tps, context 131072 | Default |
+| Hosted Text / скорость | `openai/gpt-oss-20b` | Text, reasoning, около 1000 tps, context 131072 | Явный выбор и same-family fallback |
+| Hosted Text / эксперимент | `qwen/qwen3.6-27b` | Preview, text + images, reasoning, context 131072 | Только явный выбор |
+| Hosted Vision | `qwen/qwen3.6-27b` | До 3 изображений, max output 16384 | Отдельная vision role |
+| Hosted STT | `whisper-large-v3-turbo` | Multilingual transcription | Отдельная STT role |
+
+Источники:
+
+- https://console.groq.com/docs/model/openai/gpt-oss-120b
+- https://console.groq.com/docs/model/openai/gpt-oss-20b
+- https://console.groq.com/docs/model/qwen/qwen3.6-27b
+- https://console.groq.com/docs/speech-to-text
+- https://console.groq.com/docs/rate-limits
+- https://console.groq.com/docs/prompt-caching
+
+### Что сейчас самое необходимое
+
+Первый следующий этап — не новый prompt и не новая модель, а ограниченный live baseline. Без него нельзя доказательно ответить:
+
+1. В каких сценариях GPT-OSS 120B действительно лучше 20B.
+2. Даёт ли Qwen text полезный прирост на coding/system-design вопросах или только повышает вариативность.
+3. Где длинный ответ вызван моделью, а где текущим profile prompt.
+4. Сколько фактических tokens и cache hits возвращает streamed Groq response.
+5. Как ведёт себя контекст через два связанных follow-up.
+6. Каковы реальные TTFT, полная latency и completeness в приложении, а не в изолированном API benchmark.
+
+### Предлагаемый минимальный live batch
+
+Статус: `BLOCKED` до явного разрешения пользователя на Groq calls и сохранение обезличенных результатов.
+
+Максимальный первый прогон:
+
+1. 6 одиночных сценариев × 3 text models = 18 requests.
+2. Одна трёхходовая context chain × 3 text models = 9 requests.
+3. 3 заранее подготовленных audio clips через Whisper Turbo = 3 requests.
+4. 2 screenshot cases через Qwen Vision = 2 requests.
+5. Итого не более 32 API requests и не более 70000 total tokens.
+6. Повторы в первом прогоне не выполнять.
+7. Запросы выполнять последовательно, соблюдать фактические rate-limit headers и остановиться до 95% любого доступного лимита.
+
+Набор text-сценариев:
+
+1. Короткий Java/Spring technical question.
+2. Вопрос с неоднозначным или недостаточным контекстом.
+3. System-design question с trade-offs.
+4. Coding/debugging scenario.
+5. Behavioral/HR question.
+6. Вопрос, требующий короткого и прямого ответа.
+7. Context chain: описание системы → уточнение → изменение требования.
+
+Для каждого ответа сохраняются только:
+
+1. Model ID и зафиксированная конфигурация.
+2. TTFT и полная latency.
+3. `finish_reason`.
+4. Provider-reported prompt/completion/total/cached tokens, если они реально присутствуют.
+5. Оценки 0–5: correctness, relevance, completeness, conciseness, context fidelity.
+6. Флаги hallucination, incomplete, wrong language и context loss.
+7. Текст запросов и ответов не сохраняется в telemetry; эталонные тестовые формулировки хранятся отдельно без пользовательских данных.
+
+### Acceptance для baseline
+
+1. Все три text models получают одинаковые system/profile instructions и одинаковые тестовые вопросы.
+2. Qwen не участвует в automatic fallback.
+3. Follow-up через два вопроса проверен для каждой модели.
+4. Отдельно записаны estimated и provider-reported tokens.
+5. Rate limits читаются из response headers; публичные Free Plan числа не используются как runtime truth.
+6. Нет reasoning leak.
+7. Видимый финальный ответ совпадает с History и последующим context.
+8. Результат позволяет выбрать конкретный следующий кодовый блок, а не заканчивается общим выводом «нужно улучшить prompt».
+
+### Следующий кодовый блок после baseline
+
+Выбирается только по результату измерений:
+
+1. Если ответы избыточны, но фактически верны — model-specific length/response-discipline A/B.
+2. Если теряется follow-up context — context/request lifecycle fix.
+3. Если качество 20B не уступает 120B в выбранных сценариях — явный пользовательский режим `Fast`, без автоматического роутинга.
+4. Если Qwen выигрывает только в vision — сохранить его только в vision role.
+5. Если latency формируется до text request — исправлять STT/queue/turn boundary, а не менять LLM.
+6. Если cache hits отсутствуют — проверить точное совпадение статического prefix и streamed usage, не сокращая полезный context вслепую.
+
+### Регрессионные границы
+
+1. Default остаётся `openai/gpt-oss-120b` до доказательного A/B.
+2. GPT-OSS fallback остаётся same-family only.
+3. Qwen остаётся Preview и только explicit choice.
+4. Context default остаётся 6 полных пар.
+5. GPT-OSS reasoning остаётся `low`, hidden.
+6. Prompt caching не должен менять качество ответа; статическая часть остаётся первой.
+7. Уменьшение tokens не считается успехом при падении factual/context score.
+
 ## Definition of Done
 
 Task 027 может стать `DONE` только когда:
