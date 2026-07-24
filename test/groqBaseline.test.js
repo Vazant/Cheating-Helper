@@ -152,12 +152,12 @@ test('compiled Groq profile baseline remains deterministic', () => {
     const sizes = Object.fromEntries(profiles.map(profile => [profile.id, compileProfile(profile, { language: 'en-US' }).length]));
 
     assert.deepEqual(sizes, {
-        interview: 3207,
-        sales: 2398,
-        meeting: 2257,
-        presentation: 2463,
-        negotiation: 2504,
-        exam: 2544,
+        interview: 1769,
+        sales: 1655,
+        meeting: 1598,
+        presentation: 1599,
+        negotiation: 1644,
+        exam: 1523,
         profile_senior_java_interview: 3514,
     });
 

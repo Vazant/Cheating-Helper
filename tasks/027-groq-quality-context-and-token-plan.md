@@ -559,7 +559,7 @@ Evidence:
 
 ### Блок 4 — Очистить и стабилизировать built-in prompts
 
-Статус блока: `IN_PROGRESS`
+Статус блока: `IN_PROGRESS` — prompt rewrite и automated checks готовы; live quality A/B заблокирован решением 9
 
 Предлагаемый commit: `fix: remove conflicts from Groq profile prompts`
 
@@ -598,7 +598,20 @@ Rollback:
 
 - Prompt-only commit.
 
+Evidence:
+
+- Удалены вымышленные metrics, customers, deadlines, owners, guarantees и competitor claims.
+- Удалены конфликты plain format с Markdown/bold и повтор вопроса в Exam.
+- Compiled prompt reduction: Interview 44.8%, Sales 31.0%, Meeting 29.2%, Presentation 35.1%, Negotiation 34.3%, Exam 40.1%.
+- Senior Java verified User Context и follow-up rules не изменены.
+- Prompt-quality checks: 3/3 passed.
+- Полная регрессия: 25/25 tests passed.
+- `npm.cmd run package`: passed для Windows x64.
+- Live profile-by-profile factual/context A/B: `BLOCKED` до отдельного разрешения live calls.
+
 ### Блок 5 — Безопасная Groq observability
+
+Статус блока: `IN_PROGRESS`
 
 Предлагаемый commit: `feat: record Groq request and usage metrics`
 
