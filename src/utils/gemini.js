@@ -30,6 +30,7 @@ const {
     createSseParser,
     createAbortScope,
     markIncompleteResponse,
+    normalizeGroqUsage,
 } = require('./groq');
 
 // Lazy-loaded to avoid circular dependency (localai.js imports from gemini.js)
@@ -55,6 +56,7 @@ let groqTextQueue = Promise.resolve();
 let hostedUtteranceId = 0;
 const pendingUtteranceIds = new Set();
 const hostedRequestScope = createAbortScope();
+let groqRequestMetrics = [];
 
 function getAiProfileSnapshot(id) {
     return JSON.parse(JSON.stringify(getAiProfile(id)));
@@ -109,6 +111,31 @@ function isHostedRequestActive(requestContext) {
     return Boolean(currentGroqSession && requestContext?.isActive());
 }
 
+function recordGroqMetric(metric) {
+    const safeMetric = {
+        timestamp: Date.now(),
+        requestId: String(metric.requestId || ''),
+        stage: ['text', 'stt', 'vision'].includes(metric.stage) ? metric.stage : 'text',
+        selectedModel: metric.selectedModel || null,
+        actualModel: metric.actualModel || null,
+        keySlot: Number.isInteger(metric.keySlot) ? metric.keySlot : null,
+        estimatedInputTokens: Number.isFinite(metric.estimatedInputTokens) ? metric.estimatedInputTokens : null,
+        includedPairs: Number.isInteger(metric.includedPairs) ? metric.includedPairs : null,
+        trimmedMessages: Number.isInteger(metric.trimmedMessages) ? metric.trimmedMessages : null,
+        plannedCompletionTokens: Number.isInteger(metric.plannedCompletionTokens) ? metric.plannedCompletionTokens : null,
+        reasoningMode: metric.reasoningMode || null,
+        status: String(metric.status || 'unknown'),
+        finishReason: metric.finishReason || null,
+        timings: metric.timings || null,
+        rateLimits: metric.rateLimits || null,
+        usage: normalizeGroqUsage(metric.usage),
+    };
+    groqRequestMetrics.push(safeMetric);
+    if (groqRequestMetrics.length > 100) groqRequestMetrics = groqRequestMetrics.slice(-100);
+    console.log('[Groq request metrics]', JSON.stringify(safeMetric));
+    return safeMetric;
+}
+
 // Build context message for session restoration
 function buildContextMessage() {
     const lastTurns = conversationHistory.slice(-20);
@@ -129,6 +156,7 @@ function initializeNewSession(profile = null, customPrompt = null, metadata = {}
     conversationHistory = [];
     screenAnalysisHistory = [];
     groqConversationHistory = [];
+    groqRequestMetrics = [];
     groqLimitWarnings.clear();
     currentProfile = profile;
     currentCustomPrompt = customPrompt;
@@ -160,7 +188,7 @@ function saveConversationTurn(transcription, aiResponse, metadata = {}) {
     };
 
     conversationHistory.push(conversationTurn);
-    console.log('Saved conversation turn:', conversationTurn);
+    console.log('[Conversation turn saved]', { status: conversationTurn.status, timestamp: conversationTurn.timestamp });
 
     // Send to renderer to save in IndexedDB
     sendToRenderer('save-conversation-turn', {
@@ -201,6 +229,7 @@ function getCurrentSessionData() {
     return {
         sessionId: currentSessionId,
         history: conversationHistory,
+        groqMetrics: groqRequestMetrics,
     };
 }
 
@@ -317,12 +346,26 @@ function queueGroqText(text, requestContext = getHostedRequestContext()) {
 
 async function transcribeGroqAudio(wavBuffer, language, requestContext) {
     if (!isHostedRequestActive(requestContext)) return { success: false, aborted: true };
+    const requestId = createResponseId();
+    const requestStartedAt = Date.now();
+    const model = 'whisper-large-v3-turbo';
+    const recordMetric = (keySlot, status, details = {}) =>
+        recordGroqMetric({
+            requestId,
+            stage: 'stt',
+            selectedModel: model,
+            actualModel: model,
+            keySlot,
+            status,
+            timings: { totalMs: Date.now() - requestStartedAt },
+            ...details,
+        });
     const groqApiKeys = getGroqApiKeySequence();
     if (!groqApiKeys.length) return { success: false, error: 'Groq API key required for speech recognition' };
 
     for (let keyIndex = 0; keyIndex < groqApiKeys.length; keyIndex++) {
         const form = new FormData();
-        form.append('model', 'whisper-large-v3-turbo');
+        form.append('model', model);
         form.append('response_format', 'json');
         if (language?.code) form.append('language', language.code);
         form.append('file', new Blob([wavBuffer], { type: 'audio/wav' }), 'utterance.wav');
@@ -337,25 +380,31 @@ async function transcribeGroqAudio(wavBuffer, language, requestContext) {
             });
         } catch (error) {
             if (!isHostedRequestActive(requestContext) || error.name === 'AbortError') return { success: false, aborted: true };
+            recordMetric(keyIndex + 1, 'network-error');
             return { success: false, error: `Groq STT network error: ${error.message}` };
         }
 
         if (!isHostedRequestActive(requestContext)) return { success: false, aborted: true };
         const rateLimits = readGroqRateLimits(response.headers);
-        recordGroqRateLimits(rateLimits, 'whisper-large-v3-turbo', keyIndex + 1);
+        recordGroqRateLimits(rateLimits, model, keyIndex + 1);
         if (response.ok) {
             const body = await response.json();
             if (!isHostedRequestActive(requestContext)) return { success: false, aborted: true };
             const text = typeof body.text === 'string' ? body.text.trim() : '';
-            if (!text) return { success: false, error: 'Groq STT returned an empty transcript' };
+            if (!text) {
+                recordMetric(keyIndex + 1, 'empty-transcript', { rateLimits });
+                return { success: false, error: 'Groq STT returned an empty transcript' };
+            }
             activateGroqApiKey(groqApiKeys[keyIndex]);
+            recordMetric(keyIndex + 1, 'success', { rateLimits });
             return { success: true, text };
         }
 
         const error = readGroqError(await response.text().catch(() => ''));
         if (!isHostedRequestActive(requestContext)) return { success: false, aborted: true };
+        recordMetric(keyIndex + 1, response.status, { rateLimits });
         if (response.status === 429 && keyIndex + 1 < groqApiKeys.length) continue;
-        return { success: false, error: `Groq STT ${getGroqErrorStatus(response.status, 'whisper-large-v3-turbo', rateLimits, error.message)}` };
+        return { success: false, error: `Groq STT ${getGroqErrorStatus(response.status, model, rateLimits, error.message)}` };
     }
     return { success: false, error: 'All configured Groq keys reached their speech recognition rate limit' };
 }
@@ -452,8 +501,21 @@ async function sendToGroq(transcription, requestContext = getHostedRequestContex
         currentGroqSession?.behavior,
         currentGroqSession?.tpmLimit
     );
+    const metricBase = {
+        requestId: responseId,
+        stage: 'text',
+        selectedModel: currentGroqSession?.model,
+        estimatedInputTokens: requestPlan.inputTokens,
+        includedPairs: requestPlan.messages ? Math.max(0, (requestPlan.messages.length - 2) / 2) : 0,
+        trimmedMessages: requestPlan.trimmedMessages || 0,
+        plannedCompletionTokens: requestPlan.maxCompletionTokens,
+        reasoningMode: currentGroqSession?.model?.startsWith('openai/gpt-oss-') ? 'low' : null,
+    };
+    const recordAttempt = (actualModel, keySlot, status, details = {}) =>
+        recordGroqMetric({ ...metricBase, actualModel, keySlot, status, ...details });
     if (requestPlan.error) {
         removeUserTurn();
+        recordAttempt(null, null, 'budget-error');
         console.warn('[Groq request budget]', requestPlan.error);
         sendToRenderer('update-status', requestPlan.error);
         return false;
@@ -490,6 +552,7 @@ async function sendToGroq(transcription, requestContext = getHostedRequestContex
         } catch (error) {
             removeUserTurn();
             if (!isHostedRequestActive(requestContext) || error.name === 'AbortError') return false;
+            recordAttempt(model, keyIndex + 1, 'network-error', { timings: { totalMs: Date.now() - requestReceivedAt } });
             console.error('Groq network error:', error);
             sendToRenderer('update-status', `Groq network error: ${error.message}`);
             return false;
@@ -510,6 +573,14 @@ async function sendToGroq(transcription, requestContext = getHostedRequestContex
                 removeUserTurn();
                 return false;
             }
+            recordAttempt(model, keyIndex + 1, response.status, {
+                timings: {
+                    queueMs: fetchStartedAt - requestReceivedAt,
+                    headersMs: headersReceivedAt - fetchStartedAt,
+                    totalMs: Date.now() - requestReceivedAt,
+                },
+                rateLimits,
+            });
             const nextModel = models[index + 1];
             const fallbackReason = getGroqFallbackDecision(response.status, Boolean(nextModel));
 
@@ -588,6 +659,7 @@ async function sendToGroq(transcription, requestContext = getHostedRequestContex
         const reader = response.body?.getReader();
         if (!reader) {
             removeUserTurn();
+            recordAttempt(model, keyIndex + 1, 'unreadable-stream', { rateLimits });
             console.error('Groq response did not include a readable stream');
             sendToRenderer('update-status', 'Groq returned an unreadable response');
             return false;
@@ -600,6 +672,7 @@ async function sendToGroq(transcription, requestContext = getHostedRequestContex
         let lastRenderAt = 0;
         let lastRenderedText = '';
         let firstContentAt = null;
+        let reportedUsage = null;
         const parser = createSseParser(data => {
             if (!isHostedRequestActive(requestContext)) return;
             const event = readGroqSseEvent(data);
@@ -608,6 +681,7 @@ async function sendToGroq(transcription, requestContext = getHostedRequestContex
                 return;
             }
             if (event.finishReason) finishReason = event.finishReason;
+            if (event.usage) reportedUsage = event.usage;
             if (event.done || !event.content) return;
             fullText += event.content;
             if (!firstContentAt) firstContentAt = Date.now();
@@ -652,6 +726,17 @@ async function sendToGroq(transcription, requestContext = getHostedRequestContex
             } else {
                 removeUserTurn();
             }
+            recordAttempt(model, keyIndex + 1, 'stream-error', {
+                finishReason,
+                timings: {
+                    queueMs: fetchStartedAt - requestReceivedAt,
+                    headersMs: headersReceivedAt - fetchStartedAt,
+                    firstContentMs: firstContentAt ? firstContentAt - fetchStartedAt : null,
+                    totalMs: Date.now() - requestReceivedAt,
+                },
+                rateLimits,
+                usage: reportedUsage,
+            });
             console.error('Groq streaming error:', error);
             sendToRenderer('update-status', `Groq streaming error: ${error.message}`);
             return false;
@@ -664,6 +749,11 @@ async function sendToGroq(transcription, requestContext = getHostedRequestContex
         const cleanedResponse = stripThinkingTags(fullText);
         if (!cleanedResponse) {
             removeUserTurn();
+            recordAttempt(model, keyIndex + 1, 'empty-response', {
+                finishReason,
+                rateLimits,
+                usage: reportedUsage,
+            });
             console.error('[Groq protocol error]', JSON.stringify({ event: 'empty_response', provider: 'groq', model, status: response.status }));
             sendToRenderer('update-status', `Groq returned no response content (${model})`);
             return false;
@@ -674,18 +764,20 @@ async function sendToGroq(transcription, requestContext = getHostedRequestContex
                 isFirst ? createResponsePayload(cleanedResponse, transcription, responseId) : createResponseUpdate(cleanedResponse, responseId)
             );
         const streamDoneAt = Date.now();
-        console.log(
-            '[Groq latency]',
-            JSON.stringify({
-                model,
-                keySlot: keyIndex + 1,
-                queueMs: fetchStartedAt - requestReceivedAt,
-                headersMs: headersReceivedAt - fetchStartedAt,
-                firstContentMs: firstContentAt ? firstContentAt - fetchStartedAt : null,
-                streamMs: streamDoneAt - (firstContentAt || headersReceivedAt),
-                totalMs: streamDoneAt - requestReceivedAt,
-            })
-        );
+        const timings = {
+            queueMs: fetchStartedAt - requestReceivedAt,
+            headersMs: headersReceivedAt - fetchStartedAt,
+            firstContentMs: firstContentAt ? firstContentAt - fetchStartedAt : null,
+            streamMs: streamDoneAt - (firstContentAt || headersReceivedAt),
+            totalMs: streamDoneAt - requestReceivedAt,
+        };
+        console.log('[Groq latency]', JSON.stringify({ model, keySlot: keyIndex + 1, ...timings }));
+        recordAttempt(model, keyIndex + 1, 'success', {
+            finishReason: finishReason || 'stop',
+            timings,
+            rateLimits,
+            usage: reportedUsage,
+        });
 
         if (finishReason === 'length') {
             groqConversationHistory.push({ role: 'assistant', content: markIncompleteResponse(cleanedResponse, 'length') });
@@ -711,6 +803,19 @@ async function sendToGroq(transcription, requestContext = getHostedRequestContex
 
 async function sendGroqImage(base64Data, prompt, requestContext = getHostedRequestContext()) {
     if (!isHostedRequestActive(requestContext)) return { success: false, aborted: true };
+    const requestId = createResponseId();
+    const requestStartedAt = Date.now();
+    const recordMetric = (keySlot, status, details = {}) =>
+        recordGroqMetric({
+            requestId,
+            stage: 'vision',
+            selectedModel: GROQ_VISION_MODEL,
+            actualModel: GROQ_VISION_MODEL,
+            keySlot,
+            status,
+            timings: { totalMs: Date.now() - requestStartedAt },
+            ...details,
+        });
     const groqApiKeys = getGroqApiKeySequence();
     if (!groqApiKeys.length) return { success: false, error: 'Groq API key required for screenshot analysis' };
 
@@ -742,6 +847,7 @@ async function sendGroqImage(base64Data, prompt, requestContext = getHostedReque
             });
         } catch (error) {
             if (!isHostedRequestActive(requestContext) || error.name === 'AbortError') return { success: false, aborted: true };
+            recordMetric(keyIndex + 1, 'network-error');
             return { success: false, error: `Groq Vision network error: ${error.message}` };
         }
 
@@ -753,14 +859,23 @@ async function sendGroqImage(base64Data, prompt, requestContext = getHostedReque
             const body = await response.json();
             if (!isHostedRequestActive(requestContext)) return { success: false, aborted: true };
             const text = body.choices?.[0]?.message?.content?.trim();
-            if (!text) return { success: false, error: 'Groq Vision returned an empty response' };
+            if (!text) {
+                recordMetric(keyIndex + 1, 'empty-response', { rateLimits });
+                return { success: false, error: 'Groq Vision returned an empty response' };
+            }
             activateGroqApiKey(groqApiKeys[keyIndex]);
+            recordMetric(keyIndex + 1, 'success', {
+                finishReason: body.choices?.[0]?.finish_reason || null,
+                rateLimits,
+                usage: body.usage || null,
+            });
             sendToRenderer('new-response', createResponsePayload(text));
             return { success: true, text, model: GROQ_VISION_MODEL };
         }
 
         const error = readGroqError(await response.text().catch(() => ''));
         if (!isHostedRequestActive(requestContext)) return { success: false, aborted: true };
+        recordMetric(keyIndex + 1, response.status, { rateLimits });
         console.error('[Groq Vision error]', {
             provider: 'groq',
             model: GROQ_VISION_MODEL,

@@ -125,11 +125,30 @@ function buildGroqRequestPlan(systemPrompt, history, behavior = {}, tokenLimit =
     return { messages, inputTokens, maxCompletionTokens, trimmedMessages: completed.length - retained.length };
 }
 
+function normalizeGroqUsage(usage) {
+    if (!usage || typeof usage !== 'object') return null;
+    const number = value => (Number.isFinite(Number(value)) && Number(value) >= 0 ? Number(value) : null);
+    const normalized = {
+        promptTokens: number(usage.prompt_tokens ?? usage.promptTokens),
+        completionTokens: number(usage.completion_tokens ?? usage.completionTokens),
+        totalTokens: number(usage.total_tokens ?? usage.totalTokens),
+        cachedTokens: number(usage.prompt_tokens_details?.cached_tokens ?? usage.cachedTokens),
+    };
+    return Object.values(normalized).some(value => value !== null) ? normalized : null;
+}
+
 function readGroqSseEvent(data) {
     if (data === '[DONE]') return { done: true, content: '', finishReason: null };
     try {
-        const choice = JSON.parse(data).choices?.[0];
-        return { done: false, content: choice?.delta?.content || '', finishReason: choice?.finish_reason || null };
+        const parsed = JSON.parse(data);
+        const choice = parsed.choices?.[0];
+        const usage = normalizeGroqUsage(parsed.usage);
+        return {
+            done: false,
+            content: choice?.delta?.content || '',
+            finishReason: choice?.finish_reason || null,
+            ...(usage ? { usage } : {}),
+        };
     } catch {
         return null;
     }
@@ -200,6 +219,7 @@ module.exports = {
     estimateTextTokens,
     estimateMessagesTokens,
     buildGroqRequestPlan,
+    normalizeGroqUsage,
     readGroqSseEvent,
     createSseParser,
     createAbortScope,

@@ -39,7 +39,8 @@ assert.ok(rendererSource.includes('micStream.getTracks().forEach(track => track.
 
 const mainSource = fs.readFileSync(require.resolve('../src/utils/gemini'), 'utf8');
 assert.ok(mainSource.includes('/openai/v1/audio/transcriptions'));
-assert.ok(mainSource.includes("form.append('model', 'whisper-large-v3-turbo')"));
+assert.ok(mainSource.includes("const model = 'whisper-large-v3-turbo'"));
+assert.ok(mainSource.includes("form.append('model', model)"));
 assert.ok(mainSource.includes("form.append('language', language.code)"));
 assert.ok(mainSource.includes("processHostedAudioChunk('system'"));
 assert.ok(mainSource.includes("processHostedAudioChunk('microphone'"));

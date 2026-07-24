@@ -11,6 +11,7 @@ const {
     getGroqErrorStatus,
     estimateTextTokens,
     buildGroqRequestPlan,
+    normalizeGroqUsage,
     readGroqSseEvent,
     createSseParser,
 } = require('../src/utils/groq');
@@ -88,6 +89,23 @@ assert.deepStrictEqual(readGroqSseEvent('{"choices":[{"delta":{},"finish_reason"
     finishReason: 'length',
 });
 assert.strictEqual(readGroqSseEvent('not-json'), null);
+assert.deepStrictEqual(
+    normalizeGroqUsage({
+        prompt_tokens: 120,
+        completion_tokens: 30,
+        total_tokens: 150,
+        prompt_tokens_details: { cached_tokens: 96 },
+        ignored: 'not retained',
+    }),
+    { promptTokens: 120, completionTokens: 30, totalTokens: 150, cachedTokens: 96 }
+);
+assert.strictEqual(normalizeGroqUsage({ ignored: true }), null);
+assert.deepStrictEqual(readGroqSseEvent('{"choices":[],"usage":{"prompt_tokens":12,"completion_tokens":3,"total_tokens":15}}'), {
+    done: false,
+    content: '',
+    finishReason: null,
+    usage: { promptTokens: 12, completionTokens: 3, totalTokens: 15, cachedTokens: null },
+});
 
 const geminiSource = fs.readFileSync(require.resolve('../src/utils/gemini'), 'utf8');
 const sendToGroqSource = geminiSource.slice(geminiSource.indexOf('async function sendToGroq'), geminiSource.indexOf('async function sendGroqImage'));

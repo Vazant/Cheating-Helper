@@ -611,7 +611,7 @@ Evidence:
 
 ### Блок 5 — Безопасная Groq observability
 
-Статус блока: `IN_PROGRESS`
+Статус блока: `IN_PROGRESS` — implementation и mocked usage checks готовы; live streamed usage verification заблокирована решением 9
 
 Предлагаемый commit: `feat: record Groq request and usage metrics`
 
@@ -654,7 +654,21 @@ Rollback:
 
 - Удалить metadata capture; runtime request payload остаётся прежним.
 
+Evidence:
+
+- Text/STT/Vision используют единый whitelist metric contract.
+- В памяти хранится не более 100 metrics текущей сессии; новый Start очищает их.
+- Prompt, transcript, answer, audio/image payload и API key в metrics не записываются.
+- SSE/JSON usage нормализуется только в `prompt/completion/total/cached` counters; неизвестные поля отбрасываются.
+- Дополнительный запрос и неподтверждённый `stream_options.include_usage` не добавлены.
+- Raw conversation turn удалён из console log.
+- Metrics checks: 3/3 passed.
+- Полная регрессия: 28/28 tests passed.
+- Live streamed `usage.cached_tokens` fixture: `BLOCKED` до отдельного разрешения live calls.
+
 ### Блок 6 — Понятный active-session context control
+
+Статус блока: `IN_PROGRESS`
 
 Предлагаемый commit: `feat: expose Groq context budget controls`
 
