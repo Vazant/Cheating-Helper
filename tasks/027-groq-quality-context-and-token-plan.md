@@ -425,7 +425,7 @@ Rollback:
 
 ### Блок 1 — Автоматизированный Groq baseline
 
-Статус блока: `IN_PROGRESS`
+Статус блока: `DONE`
 
 Предлагаемый commit: `test: lock Groq quality and context baseline`
 
@@ -459,7 +459,16 @@ Rollback:
 
 - Удалить test harness и fixtures.
 
+Evidence:
+
+- Добавлен `test/groqBaseline.test.js`, production runtime не изменён.
+- Новый baseline: 8/8 checks passed.
+- Полная регрессия: 16/16 tests passed командой `node --test "test/*.test.js"`.
+- Зафиксированы exact follow-up pairs, context controls, pair-safe TPM trimming, pre-fetch rejection, mocked split SSE, bounded retries, prompt sizes и известные runtime gaps.
+
 ### Блок 2 — Session ownership и отмена устаревших запросов
+
+Статус блока: `IN_PROGRESS`
 
 Предлагаемый commit: `fix: isolate Groq requests from stopped sessions`
 
