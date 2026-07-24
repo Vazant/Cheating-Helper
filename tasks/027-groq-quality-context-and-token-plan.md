@@ -822,6 +822,8 @@ Evidence:
 
 ### Блок 9 — Длинные и быстрые audio questions
 
+Статус блока: `BLOCKED` — текущая 30-секундная policy сохранена; изменение запрещено решением 8 до live A5–A7
+
 Предлагаемый commit: `fix: harden hosted speech turn boundaries`
 
 Scope:
@@ -852,7 +854,16 @@ Rollback:
 
 - Только audio boundary/queue commit.
 
+Evidence:
+
+- Текущий segmenter подтверждён кодом: `silenceEndMs: 800`, `maxUtteranceMs: 30000`, FIFO audio → STT → text.
+- Manual/toggle flush сохраняет последний распознанный segment и уже покрыт automated contract.
+- Без записей 45–60 секунд и двух близких реальных вопросов нельзя доказательно выбрать новый timeout, split или backlog policy.
+- Application code блока 9 намеренно не изменён до A5–A7.
+
 ### Блок 10 — Packaged Windows Groq release gate
+
+Статус блока: `BLOCKED` — automated/package gates зелёные; live Groq matrix требует отдельного разрешения бюджета
 
 Предлагаемый commit: `test: complete packaged Groq release evidence`
 
