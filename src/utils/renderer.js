@@ -1,11 +1,14 @@
 // renderer.js
 const { ipcRenderer } = require('electron');
+const { createSpeechCaptureGate } = require('./utils/speechCapture');
 
 let mediaStream = null;
 let screenshotInterval = null;
 let audioContext = null;
 let audioProcessor = null;
 let micAudioProcessor = null;
+let micAudioContext = null;
+let micStream = null;
 let audioBuffer = [];
 const SAMPLE_RATE = 24000;
 const AUDIO_CHUNK_DURATION = 0.1; // seconds
@@ -56,6 +59,13 @@ const storage = {
     async setGroqApiKey(groqApiKey) {
         return ipcRenderer.invoke('storage:set-groq-api-key', groqApiKey);
     },
+    async getGroqApiKeys() {
+        const result = await ipcRenderer.invoke('storage:get-groq-api-keys');
+        return result.success ? result.data : [];
+    },
+    async setGroqApiKeys(groqApiKeys) {
+        return ipcRenderer.invoke('storage:set-groq-api-keys', groqApiKeys);
+    },
 
     // Preferences
     async getPreferences() {
@@ -67,6 +77,36 @@ const storage = {
     },
     async updatePreference(key, value) {
         return ipcRenderer.invoke('storage:update-preference', key, value);
+    },
+    async createAiProfile(sourceId = null, name = '') {
+        const result = await ipcRenderer.invoke('storage:create-ai-profile', sourceId, name);
+        if (!result.success) throw new Error(result.error);
+        return result.data;
+    },
+    async updateAiProfile(id, patch) {
+        const result = await ipcRenderer.invoke('storage:update-ai-profile', id, patch);
+        if (!result.success) throw new Error(result.error);
+        return result.data;
+    },
+    async deleteAiProfile(id) {
+        const result = await ipcRenderer.invoke('storage:delete-ai-profile', id);
+        if (!result.success) throw new Error(result.error);
+        return result.data;
+    },
+    async importAiProfile(jsonText) {
+        const result = await ipcRenderer.invoke('storage:import-ai-profile', jsonText);
+        if (!result.success) throw new Error(result.error);
+        return result.data;
+    },
+    async compileAiProfile(profile) {
+        const result = await ipcRenderer.invoke('storage:compile-ai-profile', profile);
+        if (!result.success) throw new Error(result.error);
+        return result.data;
+    },
+    async planAiProfile(profile) {
+        const result = await ipcRenderer.invoke('storage:plan-ai-profile', profile);
+        if (!result.success) throw new Error(result.error);
+        return result.data;
     },
 
     // Keybinds
@@ -106,11 +146,12 @@ const storage = {
     async getTodayLimits() {
         const result = await ipcRenderer.invoke('storage:get-today-limits');
         return result.success ? result.data : { flash: { count: 0 }, flashLite: { count: 0 } };
-    }
+    },
 };
 
 // Cache for preferences to avoid async calls in hot paths
 let preferencesCache = null;
+const speechCaptureGate = createSpeechCaptureGate();
 
 async function loadPreferencesCache() {
     preferencesCache = await storage.getPreferences();
@@ -153,17 +194,23 @@ async function initializeGemini(profile = 'interview', language = 'en-US') {
     }
 }
 
-async function initializeLocal(profile = 'interview') {
+async function initializeGroq(profile = 'interview', language = 'en-US') {
+    const result = await ipcRenderer.invoke('initialize-groq', profile, language);
+    const success = result === true || result?.success === true;
+    cheatingDaddy.setStatus(success ? 'Groq text mode' : 'error');
+    return success ? result : false;
+}
+
+async function initializeLocal(profile = 'interview', language = 'en-US') {
     const prefs = await storage.getPreferences();
     const ollamaHost = prefs.ollamaHost || 'http://127.0.0.1:11434';
     const ollamaModel = prefs.ollamaModel || 'llama3.1';
     const whisperModel = prefs.whisperModel || 'Xenova/whisper-small';
-    const customPrompt = prefs.customPrompt || '';
-
-    const success = await ipcRenderer.invoke('initialize-local', ollamaHost, ollamaModel, whisperModel, profile, customPrompt);
+    const result = await ipcRenderer.invoke('initialize-local', ollamaHost, ollamaModel, whisperModel, profile, '', language);
+    const success = result === true || result?.success === true;
     if (success) {
         cheatingDaddy.setStatus('Local AI Live');
-        return true;
+        return result;
     } else {
         cheatingDaddy.setStatus('error');
         return false;
@@ -192,16 +239,35 @@ async function initializeCloud(profile = 'interview') {
 // Listen for status updates
 ipcRenderer.on('update-status', (event, status) => {
     console.log('Status update:', status);
-    cheatingDaddy.setStatus(status);
+    const paused = preferencesCache?.speechCaptureMode === 'toggle' && !speechCaptureGate.isRecording();
+    cheatingDaddy.setStatus(paused && status === 'Listening...' ? 'Ready · use speech shortcut to record' : status);
 });
 
-async function startCapture(screenshotIntervalSeconds = 5, imageQuality = 'medium') {
+ipcRenderer.on('shortcut-registration-status', (event, result) => {
+    if (result?.action === 'toggleSpeechCapture' && !result.success) cheatingDaddy.setStatus(result.error || 'Speech shortcut is unavailable');
+});
+
+ipcRenderer.on('toggle-speech-capture', async () => {
+    if (preferencesCache?.speechCaptureMode !== 'toggle' || (!mediaStream && !micStream)) return;
+    const recording = speechCaptureGate.toggle();
+    const result = await ipcRenderer.invoke(recording ? 'reset-speech-capture' : 'flush-speech-capture');
+    if (!result?.success) {
+        speechCaptureGate.toggle();
+        cheatingDaddy.setStatus(result?.error || 'Speech recording control failed');
+        return;
+    }
+    cheatingDaddy.setStatus(recording ? 'Recording...' : result.queued ? 'Transcribing...' : 'No speech detected');
+});
+
+async function startCapture(screenshotIntervalSeconds = 5, imageQuality = 'medium', captureAudio = true) {
     // Store the image quality for manual screenshots
     currentImageQuality = imageQuality;
 
     // Refresh preferences cache
     await loadPreferencesCache();
-    const audioMode = preferencesCache.audioMode || 'speaker_only';
+    const audioMode = preferencesCache.audioMode === 'mic_only' ? 'mic_only' : 'speaker_only';
+    speechCaptureGate.reset(preferencesCache.speechCaptureMode);
+    await ipcRenderer.invoke('set-speech-capture-enabled', speechCaptureGate.isRecording());
 
     try {
         if (isMacOS) {
@@ -209,9 +275,9 @@ async function startCapture(screenshotIntervalSeconds = 5, imageQuality = 'mediu
             console.log('Starting macOS capture with SystemAudioDump...');
 
             // Start macOS audio capture
-            const audioResult = await ipcRenderer.invoke('start-macos-audio');
-            if (!audioResult.success) {
-                throw new Error('Failed to start macOS audio capture: ' + audioResult.error);
+            if (captureAudio && audioMode === 'speaker_only') {
+                const audioResult = await ipcRenderer.invoke('start-macos-audio');
+                if (!audioResult.success) throw new Error('Failed to start macOS audio capture: ' + audioResult.error);
             }
 
             // Get screen capture for screenshots
@@ -226,8 +292,7 @@ async function startCapture(screenshotIntervalSeconds = 5, imageQuality = 'mediu
 
             console.log('macOS screen capture started - audio handled by SystemAudioDump');
 
-            if (audioMode === 'mic_only' || audioMode === 'both') {
-                let micStream = null;
+            if (captureAudio && audioMode === 'mic_only') {
                 try {
                     micStream = await navigator.mediaDevices.getUserMedia({
                         audio: {
@@ -255,19 +320,22 @@ async function startCapture(screenshotIntervalSeconds = 5, imageQuality = 'mediu
                         width: { ideal: 1920 },
                         height: { ideal: 1080 },
                     },
-                    audio: {
-                        sampleRate: SAMPLE_RATE,
-                        channelCount: 1,
-                        echoCancellation: false, // Don't cancel system audio
-                        noiseSuppression: false,
-                        autoGainControl: false,
-                    },
+                    audio:
+                        captureAudio && audioMode === 'speaker_only'
+                            ? {
+                                  sampleRate: SAMPLE_RATE,
+                                  channelCount: 1,
+                                  echoCancellation: false,
+                                  noiseSuppression: false,
+                                  autoGainControl: false,
+                              }
+                            : false,
                 });
 
                 console.log('Linux system audio capture via getDisplayMedia succeeded');
 
                 // Setup audio processing for Linux system audio
-                setupLinuxSystemAudioProcessing();
+                if (captureAudio && mediaStream.getAudioTracks().length) setupLinuxSystemAudioProcessing();
             } catch (systemAudioError) {
                 console.warn('System audio via getDisplayMedia failed, trying screen-only capture:', systemAudioError);
 
@@ -283,8 +351,7 @@ async function startCapture(screenshotIntervalSeconds = 5, imageQuality = 'mediu
             }
 
             // Additionally get microphone input for Linux based on audio mode
-            if (audioMode === 'mic_only' || audioMode === 'both') {
-                let micStream = null;
+            if (captureAudio && audioMode === 'mic_only') {
                 try {
                     micStream = await navigator.mediaDevices.getUserMedia({
                         audio: {
@@ -316,22 +383,24 @@ async function startCapture(screenshotIntervalSeconds = 5, imageQuality = 'mediu
                     width: { ideal: 1920 },
                     height: { ideal: 1080 },
                 },
-                audio: {
-                    sampleRate: SAMPLE_RATE,
-                    channelCount: 1,
-                    echoCancellation: true,
-                    noiseSuppression: true,
-                    autoGainControl: true,
-                },
+                audio:
+                    captureAudio && audioMode === 'speaker_only'
+                        ? {
+                              sampleRate: SAMPLE_RATE,
+                              channelCount: 1,
+                              echoCancellation: true,
+                              noiseSuppression: true,
+                              autoGainControl: true,
+                          }
+                        : false,
             });
 
             console.log('Windows capture started with loopback audio');
 
             // Setup audio processing for Windows loopback audio only
-            setupWindowsLoopbackProcessing();
+            if (captureAudio && mediaStream.getAudioTracks().length) setupWindowsLoopbackProcessing();
 
-            if (audioMode === 'mic_only' || audioMode === 'both') {
-                let micStream = null;
+            if (captureAudio && audioMode === 'mic_only') {
                 try {
                     micStream = await navigator.mediaDevices.getUserMedia({
                         audio: {
@@ -351,6 +420,11 @@ async function startCapture(screenshotIntervalSeconds = 5, imageQuality = 'mediu
             }
         }
 
+        if (captureAudio && audioMode === 'speaker_only' && !isMacOS && !mediaStream?.getAudioTracks().length) {
+            throw new Error('System audio is unavailable for the selected screen');
+        }
+        if (captureAudio && audioMode === 'mic_only' && !micStream) throw new Error('Microphone is unavailable or permission was denied');
+
         console.log('MediaStream obtained:', {
             hasVideo: mediaStream.getVideoTracks().length > 0,
             hasAudio: mediaStream.getAudioTracks().length > 0,
@@ -359,22 +433,30 @@ async function startCapture(screenshotIntervalSeconds = 5, imageQuality = 'mediu
 
         // Manual mode only - screenshots captured on demand via shortcut
         console.log('Manual mode enabled - screenshots will be captured on demand only');
+        if (preferencesCache.speechCaptureMode === 'toggle') cheatingDaddy.setStatus('Ready · use speech shortcut to record');
+        return true;
     } catch (err) {
         console.error('Error starting capture:', err);
+        stopCapture();
         cheatingDaddy.setStatus('error');
+        return false;
     }
 }
 
-function setupLinuxMicProcessing(micStream) {
+function setupLinuxMicProcessing(stream) {
     // Setup microphone audio processing for Linux
-    const micAudioContext = new AudioContext({ sampleRate: SAMPLE_RATE });
-    const micSource = micAudioContext.createMediaStreamSource(micStream);
+    micAudioContext = new AudioContext({ sampleRate: SAMPLE_RATE });
+    const micSource = micAudioContext.createMediaStreamSource(stream);
     const micProcessor = micAudioContext.createScriptProcessor(BUFFER_SIZE, 1, 1);
 
     let audioBuffer = [];
     const samplesPerChunk = SAMPLE_RATE * AUDIO_CHUNK_DURATION;
 
     micProcessor.onaudioprocess = async e => {
+        if (!speechCaptureGate.isRecording()) {
+            audioBuffer = [];
+            return;
+        }
         const inputData = e.inputBuffer.getChannelData(0);
         audioBuffer.push(...inputData);
 
@@ -408,6 +490,10 @@ function setupLinuxSystemAudioProcessing() {
     const samplesPerChunk = SAMPLE_RATE * AUDIO_CHUNK_DURATION;
 
     audioProcessor.onaudioprocess = async e => {
+        if (!speechCaptureGate.isRecording()) {
+            audioBuffer = [];
+            return;
+        }
         const inputData = e.inputBuffer.getChannelData(0);
         audioBuffer.push(...inputData);
 
@@ -438,6 +524,10 @@ function setupWindowsLoopbackProcessing() {
     const samplesPerChunk = SAMPLE_RATE * AUDIO_CHUNK_DURATION;
 
     audioProcessor.onaudioprocess = async e => {
+        if (!speechCaptureGate.isRecording()) {
+            audioBuffer = [];
+            return;
+        }
         const inputData = e.inputBuffer.getChannelData(0);
         audioBuffer.push(...inputData);
 
@@ -539,7 +629,7 @@ async function captureScreenshot(imageQuality = 'medium', isManual = false) {
 
                 if (result.success) {
                     console.log(`Image sent successfully (${offscreenCanvas.width}x${offscreenCanvas.height})`);
-                } else {
+                } else if (!result.aborted) {
                     console.error('Failed to send image:', result.error);
                 }
             };
@@ -549,11 +639,6 @@ async function captureScreenshot(imageQuality = 'medium', isManual = false) {
         qualityValue
     );
 }
-
-const MANUAL_SCREENSHOT_PROMPT = `Help me on this page, give me the answer no bs, complete answer.
-So if its a code question, give me the approach in few bullet points, then the entire code. Also if theres anything else i need to know, tell me.
-If its a question about the website, give me the answer no bs, complete answer.
-If its a mcq question, give me the answer no bs, complete answer.`;
 
 async function captureManualScreenshot(imageQuality = null) {
     console.log('Manual screenshot triggered');
@@ -640,13 +725,12 @@ async function captureManualScreenshot(imageQuality = null) {
                 // Send image with prompt to HTTP API (response streams via IPC events)
                 const result = await ipcRenderer.invoke('send-image-content', {
                     data: base64data,
-                    prompt: MANUAL_SCREENSHOT_PROMPT,
                 });
 
                 if (result.success) {
                     console.log(`Image response completed from ${result.model}`);
                     // Response already displayed via streaming events (new-response/update-response)
-                } else {
+                } else if (!result.aborted) {
                     console.error('Failed to get image response:', result.error);
                     cheatingDaddy.addNewResponse(`Error: ${result.error}`);
                 }
@@ -662,6 +746,8 @@ async function captureManualScreenshot(imageQuality = null) {
 window.captureManualScreenshot = captureManualScreenshot;
 
 function stopCapture() {
+    speechCaptureGate.reset('toggle');
+    ipcRenderer.invoke('set-speech-capture-enabled', false).catch(() => {});
     if (screenshotInterval) {
         clearInterval(screenshotInterval);
         screenshotInterval = null;
@@ -681,6 +767,16 @@ function stopCapture() {
     if (audioContext) {
         audioContext.close();
         audioContext = null;
+    }
+
+    if (micAudioContext) {
+        micAudioContext.close();
+        micAudioContext = null;
+    }
+
+    if (micStream) {
+        micStream.getTracks().forEach(track => track.stop());
+        micStream = null;
     }
 
     if (mediaStream) {
@@ -705,7 +801,7 @@ function stopCapture() {
     offscreenContext = null;
 }
 
-// Send text message to Gemini
+// Send a text message to the active provider
 async function sendTextMessage(text) {
     if (!text || text.trim().length === 0) {
         console.warn('Cannot send empty text message');
@@ -741,7 +837,9 @@ ipcRenderer.on('save-session-context', async (event, data) => {
     try {
         await storage.saveSession(data.sessionId, {
             profile: data.profile,
-            customPrompt: data.customPrompt
+            profileName: data.profileName,
+            language: data.language,
+            customPrompt: data.customPrompt,
         });
         console.log('Session context saved:', data.sessionId, 'profile:', data.profile);
     } catch (error) {
@@ -755,18 +853,12 @@ ipcRenderer.on('save-screen-analysis', async (event, data) => {
         await storage.saveSession(data.sessionId, {
             screenAnalysisHistory: data.fullHistory,
             profile: data.profile,
-            customPrompt: data.customPrompt
+            customPrompt: data.customPrompt,
         });
         console.log('Screen analysis saved:', data.sessionId);
     } catch (error) {
         console.error('Error saving screen analysis:', error);
     }
-});
-
-// Listen for emergency erase command from main process
-ipcRenderer.on('clear-sensitive-data', async () => {
-    console.log('Clearing all data...');
-    await storage.clearAll();
 });
 
 // Handle shortcuts based on current view
@@ -790,75 +882,129 @@ const theme = {
     themes: {
         dark: {
             background: '#101010',
-            text: '#e0e0e0', textSecondary: '#a0a0a0', textMuted: '#6b6b6b',
-            border: '#2a2a2a', accent: '#ffffff',
-            btnPrimaryBg: '#ffffff', btnPrimaryText: '#000000', btnPrimaryHover: '#e0e0e0',
-            tooltipBg: '#1a1a1a', tooltipText: '#ffffff',
-            keyBg: 'rgba(255,255,255,0.1)'
+            text: '#e0e0e0',
+            textSecondary: '#a0a0a0',
+            textMuted: '#6b6b6b',
+            border: '#2a2a2a',
+            accent: '#ffffff',
+            btnPrimaryBg: '#ffffff',
+            btnPrimaryText: '#000000',
+            btnPrimaryHover: '#e0e0e0',
+            tooltipBg: '#1a1a1a',
+            tooltipText: '#ffffff',
+            keyBg: 'rgba(255,255,255,0.1)',
         },
         light: {
             background: '#ffffff',
-            text: '#1a1a1a', textSecondary: '#555555', textMuted: '#888888',
-            border: '#e0e0e0', accent: '#000000',
-            btnPrimaryBg: '#1a1a1a', btnPrimaryText: '#ffffff', btnPrimaryHover: '#333333',
-            tooltipBg: '#1a1a1a', tooltipText: '#ffffff',
-            keyBg: 'rgba(0,0,0,0.1)'
+            text: '#1a1a1a',
+            textSecondary: '#555555',
+            textMuted: '#888888',
+            border: '#e0e0e0',
+            accent: '#000000',
+            btnPrimaryBg: '#1a1a1a',
+            btnPrimaryText: '#ffffff',
+            btnPrimaryHover: '#333333',
+            tooltipBg: '#1a1a1a',
+            tooltipText: '#ffffff',
+            keyBg: 'rgba(0,0,0,0.1)',
         },
         midnight: {
             background: '#0d1117',
-            text: '#c9d1d9', textSecondary: '#8b949e', textMuted: '#6e7681',
-            border: '#30363d', accent: '#58a6ff',
-            btnPrimaryBg: '#58a6ff', btnPrimaryText: '#0d1117', btnPrimaryHover: '#79b8ff',
-            tooltipBg: '#161b22', tooltipText: '#c9d1d9',
-            keyBg: 'rgba(88,166,255,0.15)'
+            text: '#c9d1d9',
+            textSecondary: '#8b949e',
+            textMuted: '#6e7681',
+            border: '#30363d',
+            accent: '#58a6ff',
+            btnPrimaryBg: '#58a6ff',
+            btnPrimaryText: '#0d1117',
+            btnPrimaryHover: '#79b8ff',
+            tooltipBg: '#161b22',
+            tooltipText: '#c9d1d9',
+            keyBg: 'rgba(88,166,255,0.15)',
         },
         sepia: {
             background: '#f4ecd8',
-            text: '#5c4b37', textSecondary: '#7a6a56', textMuted: '#998875',
-            border: '#d4c8b0', accent: '#8b4513',
-            btnPrimaryBg: '#5c4b37', btnPrimaryText: '#f4ecd8', btnPrimaryHover: '#7a6a56',
-            tooltipBg: '#5c4b37', tooltipText: '#f4ecd8',
-            keyBg: 'rgba(92,75,55,0.15)'
+            text: '#5c4b37',
+            textSecondary: '#7a6a56',
+            textMuted: '#998875',
+            border: '#d4c8b0',
+            accent: '#8b4513',
+            btnPrimaryBg: '#5c4b37',
+            btnPrimaryText: '#f4ecd8',
+            btnPrimaryHover: '#7a6a56',
+            tooltipBg: '#5c4b37',
+            tooltipText: '#f4ecd8',
+            keyBg: 'rgba(92,75,55,0.15)',
         },
         catppuccin: {
             background: '#1e1e2e',
-            text: '#cdd6f4', textSecondary: '#a6adc8', textMuted: '#585b70',
-            border: '#313244', accent: '#cba6f7',
-            btnPrimaryBg: '#cba6f7', btnPrimaryText: '#1e1e2e', btnPrimaryHover: '#b4befe',
-            tooltipBg: '#313244', tooltipText: '#cdd6f4',
-            keyBg: 'rgba(203,166,247,0.12)'
+            text: '#cdd6f4',
+            textSecondary: '#a6adc8',
+            textMuted: '#585b70',
+            border: '#313244',
+            accent: '#cba6f7',
+            btnPrimaryBg: '#cba6f7',
+            btnPrimaryText: '#1e1e2e',
+            btnPrimaryHover: '#b4befe',
+            tooltipBg: '#313244',
+            tooltipText: '#cdd6f4',
+            keyBg: 'rgba(203,166,247,0.12)',
         },
         gruvbox: {
             background: '#1d2021',
-            text: '#ebdbb2', textSecondary: '#a89984', textMuted: '#665c54',
-            border: '#3c3836', accent: '#fe8019',
-            btnPrimaryBg: '#fe8019', btnPrimaryText: '#1d2021', btnPrimaryHover: '#fabd2f',
-            tooltipBg: '#3c3836', tooltipText: '#ebdbb2',
-            keyBg: 'rgba(254,128,25,0.12)'
+            text: '#ebdbb2',
+            textSecondary: '#a89984',
+            textMuted: '#665c54',
+            border: '#3c3836',
+            accent: '#fe8019',
+            btnPrimaryBg: '#fe8019',
+            btnPrimaryText: '#1d2021',
+            btnPrimaryHover: '#fabd2f',
+            tooltipBg: '#3c3836',
+            tooltipText: '#ebdbb2',
+            keyBg: 'rgba(254,128,25,0.12)',
         },
         rosepine: {
             background: '#191724',
-            text: '#e0def4', textSecondary: '#908caa', textMuted: '#6e6a86',
-            border: '#26233a', accent: '#ebbcba',
-            btnPrimaryBg: '#ebbcba', btnPrimaryText: '#191724', btnPrimaryHover: '#f6c177',
-            tooltipBg: '#26233a', tooltipText: '#e0def4',
-            keyBg: 'rgba(235,188,186,0.12)'
+            text: '#e0def4',
+            textSecondary: '#908caa',
+            textMuted: '#6e6a86',
+            border: '#26233a',
+            accent: '#ebbcba',
+            btnPrimaryBg: '#ebbcba',
+            btnPrimaryText: '#191724',
+            btnPrimaryHover: '#f6c177',
+            tooltipBg: '#26233a',
+            tooltipText: '#e0def4',
+            keyBg: 'rgba(235,188,186,0.12)',
         },
         solarized: {
             background: '#002b36',
-            text: '#93a1a1', textSecondary: '#839496', textMuted: '#586e75',
-            border: '#073642', accent: '#2aa198',
-            btnPrimaryBg: '#2aa198', btnPrimaryText: '#002b36', btnPrimaryHover: '#268bd2',
-            tooltipBg: '#073642', tooltipText: '#93a1a1',
-            keyBg: 'rgba(42,161,152,0.12)'
+            text: '#93a1a1',
+            textSecondary: '#839496',
+            textMuted: '#586e75',
+            border: '#073642',
+            accent: '#2aa198',
+            btnPrimaryBg: '#2aa198',
+            btnPrimaryText: '#002b36',
+            btnPrimaryHover: '#268bd2',
+            tooltipBg: '#073642',
+            tooltipText: '#93a1a1',
+            keyBg: 'rgba(42,161,152,0.12)',
         },
         tokyonight: {
             background: '#1a1b26',
-            text: '#c0caf5', textSecondary: '#9aa5ce', textMuted: '#565f89',
-            border: '#292e42', accent: '#7aa2f7',
-            btnPrimaryBg: '#7aa2f7', btnPrimaryText: '#1a1b26', btnPrimaryHover: '#bb9af7',
-            tooltipBg: '#292e42', tooltipText: '#c0caf5',
-            keyBg: 'rgba(122,162,247,0.12)'
+            text: '#c0caf5',
+            textSecondary: '#9aa5ce',
+            textMuted: '#565f89',
+            border: '#292e42',
+            accent: '#7aa2f7',
+            btnPrimaryBg: '#7aa2f7',
+            btnPrimaryText: '#1a1b26',
+            btnPrimaryHover: '#bb9af7',
+            tooltipBg: '#292e42',
+            tooltipText: '#c0caf5',
+            keyBg: 'rgba(122,162,247,0.12)',
         },
     },
 
@@ -878,29 +1024,31 @@ const theme = {
             gruvbox: 'Gruvbox Dark',
             rosepine: 'Ros\u00e9 Pine',
             solarized: 'Solarized Dark',
-            tokyonight: 'Tokyo Night'
+            tokyonight: 'Tokyo Night',
         };
         return Object.keys(this.themes).map(key => ({
             value: key,
             name: names[key] || key,
-            colors: this.themes[key]
+            colors: this.themes[key],
         }));
     },
 
     hexToRgb(hex) {
         const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
-        return result ? {
-            r: parseInt(result[1], 16),
-            g: parseInt(result[2], 16),
-            b: parseInt(result[3], 16)
-        } : { r: 30, g: 30, b: 30 };
+        return result
+            ? {
+                  r: parseInt(result[1], 16),
+                  g: parseInt(result[2], 16),
+                  b: parseInt(result[3], 16),
+              }
+            : { r: 30, g: 30, b: 30 };
     },
 
     lightenColor(rgb, amount) {
         return {
             r: Math.min(255, rgb.r + amount),
             g: Math.min(255, rgb.g + amount),
-            b: Math.min(255, rgb.b + amount)
+            b: Math.min(255, rgb.b + amount),
         };
     },
 
@@ -908,7 +1056,7 @@ const theme = {
         return {
             r: Math.max(0, rgb.r - amount),
             g: Math.max(0, rgb.g - amount),
-            b: Math.max(0, rgb.b - amount)
+            b: Math.max(0, rgb.b - amount),
         };
     },
 
@@ -1004,7 +1152,7 @@ const theme = {
     async save(themeName) {
         await storage.updatePreference('theme', themeName);
         this.apply(themeName);
-    }
+    },
 };
 
 // Consolidated cheatingDaddy object - all functions in one place
@@ -1027,6 +1175,7 @@ const cheatingDaddy = {
 
     // Core functionality
     initializeGemini,
+    initializeGroq,
     initializeCloud,
     initializeLocal,
     startCapture,
@@ -1048,8 +1197,12 @@ const cheatingDaddy = {
     isMacOS: isMacOS,
 };
 
-// Make it globally available
-window.cheatingDaddy = cheatingDaddy;
+// Publish the renderer API before deferred web-component modules run.
+Object.defineProperty(window, 'cheatingDaddy', {
+    value: cheatingDaddy,
+    configurable: false,
+    writable: false,
+});
 
 // Load theme after DOM is ready
 if (document.readyState === 'loading') {

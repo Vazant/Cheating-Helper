@@ -81,15 +81,15 @@ export class CheatingDaddyApp extends LitElement {
         }
 
         .traffic-light.close {
-            background: #FF5F57;
+            background: #ff5f57;
         }
 
         .traffic-light.minimize {
-            background: #FEBC2E;
+            background: #febc2e;
         }
 
         .traffic-light.maximize {
-            background: #28C840;
+            background: #28c840;
         }
 
         .sidebar {
@@ -100,7 +100,10 @@ export class CheatingDaddyApp extends LitElement {
             display: flex;
             flex-direction: column;
             padding: 42px 0 var(--space-md) 0;
-            transition: width var(--transition), min-width var(--transition), opacity var(--transition);
+            transition:
+                width var(--transition),
+                min-width var(--transition),
+                opacity var(--transition);
         }
 
         .sidebar.hidden {
@@ -144,7 +147,9 @@ export class CheatingDaddyApp extends LitElement {
             font-size: var(--font-size-sm);
             font-weight: var(--font-weight-medium);
             cursor: pointer;
-            transition: color var(--transition), background var(--transition);
+            transition:
+                color var(--transition),
+                background var(--transition);
             border: none;
             background: none;
             width: 100%;
@@ -187,7 +192,9 @@ export class CheatingDaddyApp extends LitElement {
             font-weight: var(--font-weight-medium);
             cursor: pointer;
             text-align: left;
-            transition: background var(--transition), border-color var(--transition);
+            transition:
+                background var(--transition),
+                border-color var(--transition);
             animation: update-wobble 5s ease-in-out infinite;
         }
 
@@ -197,11 +204,23 @@ export class CheatingDaddyApp extends LitElement {
         }
 
         @keyframes update-wobble {
-            0%, 90%, 100% { transform: rotate(0deg); }
-            92% { transform: rotate(-2deg); }
-            94% { transform: rotate(2deg); }
-            96% { transform: rotate(-1.5deg); }
-            98% { transform: rotate(1.5deg); }
+            0%,
+            90%,
+            100% {
+                transform: rotate(0deg);
+            }
+            92% {
+                transform: rotate(-2deg);
+            }
+            94% {
+                transform: rotate(2deg);
+            }
+            96% {
+                transform: rotate(-1.5deg);
+            }
+            98% {
+                transform: rotate(1.5deg);
+            }
         }
 
         .update-btn svg {
@@ -303,6 +322,27 @@ export class CheatingDaddyApp extends LitElement {
             color: var(--text-primary);
         }
 
+        .live-diagnostics {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: var(--space-md);
+            min-height: 25px;
+            padding: 3px var(--space-md);
+            overflow: hidden;
+            border-bottom: 1px solid var(--border);
+            background: var(--bg-elevated);
+            color: var(--text-muted);
+            font-family: var(--font-mono);
+            font-size: var(--font-size-xs);
+            white-space: nowrap;
+        }
+
+        .live-diagnostic-item {
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
         /* Content inner */
         .content-inner {
             flex: 1;
@@ -350,6 +390,8 @@ export class CheatingDaddyApp extends LitElement {
         isRecording: { type: Boolean },
         sessionActive: { type: Boolean },
         selectedProfile: { type: String },
+        activeProfileName: { type: String },
+        activeLanguageName: { type: String },
         selectedLanguage: { type: String },
         responses: { type: Array },
         currentResponseIndex: { type: Number },
@@ -363,6 +405,8 @@ export class CheatingDaddyApp extends LitElement {
         _storageLoaded: { state: true },
         _updateAvailable: { state: true },
         _whisperDownloading: { state: true },
+        _groqSessionPlan: { state: true },
+        _groqMetric: { state: true },
     };
 
     constructor() {
@@ -373,6 +417,8 @@ export class CheatingDaddyApp extends LitElement {
         this.isRecording = false;
         this.sessionActive = false;
         this.selectedProfile = 'interview';
+        this.activeProfileName = '';
+        this.activeLanguageName = '';
         this.selectedLanguage = 'en-US';
         this.selectedScreenshotInterval = '5';
         this.selectedImageQuality = 'medium';
@@ -388,6 +434,8 @@ export class CheatingDaddyApp extends LitElement {
         this._timerInterval = null;
         this._updateAvailable = false;
         this._whisperDownloading = false;
+        this._groqSessionPlan = null;
+        this._groqMetric = null;
         this._localVersion = '';
 
         this._loadFromStorage();
@@ -419,10 +467,7 @@ export class CheatingDaddyApp extends LitElement {
 
     async _loadFromStorage() {
         try {
-            const [config, prefs] = await Promise.all([
-                cheatingDaddy.storage.getConfig(),
-                cheatingDaddy.storage.getPreferences()
-            ]);
+            const [config, prefs] = await Promise.all([cheatingDaddy.storage.getConfig(), cheatingDaddy.storage.getPreferences()]);
 
             this.currentView = config.onboarded ? 'main' : 'onboarding';
             this.selectedProfile = prefs.selectedProfile || 'interview';
@@ -448,9 +493,16 @@ export class CheatingDaddyApp extends LitElement {
             ipcRenderer.on('new-response', (_, response) => this.addNewResponse(response));
             ipcRenderer.on('update-response', (_, response) => this.updateCurrentResponse(response));
             ipcRenderer.on('update-status', (_, status) => this.setStatus(status));
-            ipcRenderer.on('click-through-toggled', (_, isEnabled) => { this._isClickThrough = isEnabled; });
+            ipcRenderer.on('groq-metric', (_, metric) => {
+                if (metric?.stage === 'text') this._groqMetric = metric;
+            });
+            ipcRenderer.on('click-through-toggled', (_, isEnabled) => {
+                this._isClickThrough = isEnabled;
+            });
             ipcRenderer.on('reconnect-failed', (_, data) => this.addNewResponse(data.message));
-            ipcRenderer.on('whisper-downloading', (_, downloading) => { this._whisperDownloading = downloading; });
+            ipcRenderer.on('whisper-downloading', (_, downloading) => {
+                this._whisperDownloading = downloading;
+            });
         }
     }
 
@@ -462,6 +514,7 @@ export class CheatingDaddyApp extends LitElement {
             ipcRenderer.removeAllListeners('new-response');
             ipcRenderer.removeAllListeners('update-response');
             ipcRenderer.removeAllListeners('update-status');
+            ipcRenderer.removeAllListeners('groq-metric');
             ipcRenderer.removeAllListeners('click-through-toggled');
             ipcRenderer.removeAllListeners('reconnect-failed');
             ipcRenderer.removeAllListeners('whisper-downloading');
@@ -504,9 +557,19 @@ export class CheatingDaddyApp extends LitElement {
         }
     }
 
+    normalizeResponse(response) {
+        if (typeof response === 'string') return { id: null, question: '', answer: response };
+        if (!response || typeof response !== 'object') return { id: null, question: '', answer: '' };
+        return {
+            id: typeof response.id === 'string' ? response.id : null,
+            question: typeof response.question === 'string' ? response.question.trim() : '',
+            answer: typeof response.answer === 'string' ? response.answer : '',
+        };
+    }
+
     addNewResponse(response) {
         const wasOnLatest = this.currentResponseIndex === this.responses.length - 1;
-        this.responses = [...this.responses, response];
+        this.responses = [...this.responses, this.normalizeResponse(response)];
         if (wasOnLatest || this.currentResponseIndex === -1) {
             this.currentResponseIndex = this.responses.length - 1;
         }
@@ -515,11 +578,26 @@ export class CheatingDaddyApp extends LitElement {
     }
 
     updateCurrentResponse(response) {
-        if (this.responses.length > 0) {
-            this.responses = [...this.responses.slice(0, -1), response];
-        } else {
+        if (!this.responses.length) {
             this.addNewResponse(response);
+            return;
         }
+
+        const update = this.normalizeResponse(response);
+        const matchingIndex = update.id ? this.responses.findIndex(item => item.id === update.id) : -1;
+        if (update.id && matchingIndex < 0) {
+            this.addNewResponse(update);
+            return;
+        }
+        const targetIndex = matchingIndex >= 0 ? matchingIndex : this.responses.length - 1;
+        const current = this.normalizeResponse(this.responses[targetIndex]);
+        const next = [...this.responses];
+        next[targetIndex] = {
+            id: update.id || current.id,
+            question: update.question || current.question,
+            answer: update.answer,
+        };
+        this.responses = next;
         this.requestUpdate();
     }
 
@@ -538,6 +616,10 @@ export class CheatingDaddyApp extends LitElement {
                 await ipcRenderer.invoke('close-session');
             }
             this.sessionActive = false;
+            this.activeProfileName = '';
+            this.activeLanguageName = '';
+            this._groqSessionPlan = null;
+            this._groqMetric = null;
             this._stopTimer();
             this.currentView = 'main';
         } else {
@@ -566,7 +648,8 @@ export class CheatingDaddyApp extends LitElement {
 
     async handleStart() {
         const prefs = await cheatingDaddy.storage.getPreferences();
-        const providerMode = prefs.providerMode === 'cloud' ? 'byok' : (prefs.providerMode || 'byok');
+        const providerMode = prefs.providerMode === 'cloud' ? 'byok' : prefs.providerMode || 'byok';
+        let sessionInfo = null;
 
         if (providerMode === 'cloud') {
             const creds = await cheatingDaddy.storage.getCredentials();
@@ -586,9 +669,10 @@ export class CheatingDaddyApp extends LitElement {
                 }
                 return;
             }
+            sessionInfo = { profile: { name: this.selectedProfile } };
         } else if (providerMode === 'local') {
-            const success = await cheatingDaddy.initializeLocal(this.selectedProfile);
-            if (!success) {
+            sessionInfo = await cheatingDaddy.initializeLocal(this.selectedProfile, this.selectedLanguage);
+            if (!sessionInfo) {
                 const mainView = this.shadowRoot.querySelector('main-view');
                 if (mainView && mainView.triggerApiKeyError) {
                     mainView.triggerApiKeyError();
@@ -596,8 +680,8 @@ export class CheatingDaddyApp extends LitElement {
                 return;
             }
         } else {
-            const apiKey = await cheatingDaddy.storage.getApiKey();
-            if (!apiKey || apiKey === '') {
+            const groqApiKeys = await cheatingDaddy.storage.getGroqApiKeys();
+            if (!groqApiKeys.length) {
                 const mainView = this.shadowRoot.querySelector('main-view');
                 if (mainView && mainView.triggerApiKeyError) {
                     mainView.triggerApiKeyError();
@@ -605,12 +689,24 @@ export class CheatingDaddyApp extends LitElement {
                 return;
             }
 
-            await cheatingDaddy.initializeGemini(this.selectedProfile, this.selectedLanguage);
+            sessionInfo = await cheatingDaddy.initializeGroq(this.selectedProfile, this.selectedLanguage);
+            if (!sessionInfo) return;
         }
 
-        cheatingDaddy.startCapture(this.selectedScreenshotInterval, this.selectedImageQuality);
+        const captureStarted = await cheatingDaddy.startCapture(this.selectedScreenshotInterval, this.selectedImageQuality, true);
+        if (!captureStarted) {
+            if (window.require) {
+                const { ipcRenderer } = window.require('electron');
+                await ipcRenderer.invoke('close-session');
+            }
+            return;
+        }
         this.responses = [];
         this.currentResponseIndex = -1;
+        this._groqSessionPlan = sessionInfo?.groqPlan || null;
+        this._groqMetric = null;
+        this.activeProfileName = sessionInfo?.profile?.name || this.selectedProfile;
+        this.activeLanguageName = sessionInfo?.language?.name || this.selectedLanguage;
         this.startTime = Date.now();
         this.sessionActive = true;
         this.currentView = 'assistant';
@@ -707,10 +803,7 @@ export class CheatingDaddyApp extends LitElement {
         switch (this.currentView) {
             case 'onboarding':
                 return html`
-                    <onboarding-view
-                        .onComplete=${() => this.handleOnboardingComplete()}
-                        .onClose=${() => this.handleClose()}
-                    ></onboarding-view>
+                    <onboarding-view .onComplete=${() => this.handleOnboardingComplete()} .onClose=${() => this.handleClose()}></onboarding-view>
                 `;
 
             case 'main':
@@ -781,40 +874,116 @@ export class CheatingDaddyApp extends LitElement {
 
     renderSidebar() {
         const items = [
-            { id: 'main', label: 'Home', icon: html`<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="m19 8.71l-5.333-4.148a2.666 2.666 0 0 0-3.274 0L5.059 8.71a2.67 2.67 0 0 0-1.029 2.105v7.2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-7.2c0-.823-.38-1.6-1.03-2.105"/><path d="M16 15c-2.21 1.333-5.792 1.333-8 0"/></g></svg>` },
-            { id: 'ai-customize', label: 'AI Customization', icon: html`<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 3v7h6l-8 11v-7H5z" /></svg>` },
-            { id: 'history', label: 'History', icon: html`<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M10 20.777a9 9 0 0 1-2.48-.969M14 3.223a9.003 9.003 0 0 1 0 17.554m-9.421-3.684a9 9 0 0 1-1.227-2.592M3.124 10.5c.16-.95.468-1.85.9-2.675l.169-.305m2.714-2.941A9 9 0 0 1 10 3.223"/><path d="M12 8v4l3 3"/></g></svg>` },
-            { id: 'customize', label: 'Settings', icon: html`<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M19.875 6.27A2.23 2.23 0 0 1 21 8.218v7.284c0 .809-.443 1.555-1.158 1.948l-6.75 4.27a2.27 2.27 0 0 1-2.184 0l-6.75-4.27A2.23 2.23 0 0 1 3 15.502V8.217c0-.809.443-1.554 1.158-1.947l6.75-3.98a2.33 2.33 0 0 1 2.25 0l6.75 3.98z"/><path d="M9 12a3 3 0 1 0 6 0a3 3 0 1 0-6 0"/></g></svg>` },
-            { id: 'feedback', label: 'Feedback', icon: html`<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M18 4a3 3 0 0 1 3 3v8a3 3 0 0 1-3 3h-5l-5 3v-3H6a3 3 0 0 1-3-3V7a3 3 0 0 1 3-3zM9.5 9h.01m4.99 0h.01"/><path d="M9.5 13a3.5 3.5 0 0 0 5 0"/></g></svg>` },
-            { id: 'help', label: 'Help', icon: html`<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M12 3c7.2 0 9 1.8 9 9s-1.8 9-9 9s-9-1.8-9-9s1.8-9 9-9m0 13v.01"/><path d="M12 13a2 2 0 0 0 .914-3.782a1.98 1.98 0 0 0-2.414.483"/></g></svg>` },
+            {
+                id: 'main',
+                label: 'Home',
+                icon: html`<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24">
+                    <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2">
+                        <path
+                            d="m19 8.71l-5.333-4.148a2.666 2.666 0 0 0-3.274 0L5.059 8.71a2.67 2.67 0 0 0-1.029 2.105v7.2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-7.2c0-.823-.38-1.6-1.03-2.105"
+                        />
+                        <path d="M16 15c-2.21 1.333-5.792 1.333-8 0" />
+                    </g>
+                </svg>`,
+            },
+            {
+                id: 'ai-customize',
+                label: 'AI Customization',
+                icon: html`<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24">
+                    <path
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                        stroke-width="2"
+                        d="M13 3v7h6l-8 11v-7H5z"
+                    />
+                </svg>`,
+            },
+            {
+                id: 'history',
+                label: 'History',
+                icon: html`<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24">
+                    <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2">
+                        <path
+                            d="M10 20.777a9 9 0 0 1-2.48-.969M14 3.223a9.003 9.003 0 0 1 0 17.554m-9.421-3.684a9 9 0 0 1-1.227-2.592M3.124 10.5c.16-.95.468-1.85.9-2.675l.169-.305m2.714-2.941A9 9 0 0 1 10 3.223"
+                        />
+                        <path d="M12 8v4l3 3" />
+                    </g>
+                </svg>`,
+            },
+            {
+                id: 'customize',
+                label: 'Settings',
+                icon: html`<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24">
+                    <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2">
+                        <path
+                            d="M19.875 6.27A2.23 2.23 0 0 1 21 8.218v7.284c0 .809-.443 1.555-1.158 1.948l-6.75 4.27a2.27 2.27 0 0 1-2.184 0l-6.75-4.27A2.23 2.23 0 0 1 3 15.502V8.217c0-.809.443-1.554 1.158-1.947l6.75-3.98a2.33 2.33 0 0 1 2.25 0l6.75 3.98z"
+                        />
+                        <path d="M9 12a3 3 0 1 0 6 0a3 3 0 1 0-6 0" />
+                    </g>
+                </svg>`,
+            },
+            {
+                id: 'feedback',
+                label: 'Feedback',
+                icon: html`<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24">
+                    <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2">
+                        <path d="M18 4a3 3 0 0 1 3 3v8a3 3 0 0 1-3 3h-5l-5 3v-3H6a3 3 0 0 1-3-3V7a3 3 0 0 1 3-3zM9.5 9h.01m4.99 0h.01" />
+                        <path d="M9.5 13a3.5 3.5 0 0 0 5 0" />
+                    </g>
+                </svg>`,
+            },
+            {
+                id: 'help',
+                label: 'Help',
+                icon: html`<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24">
+                    <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2">
+                        <path d="M12 3c7.2 0 9 1.8 9 9s-1.8 9-9 9s-9-1.8-9-9s1.8-9 9-9m0 13v.01" />
+                        <path d="M12 13a2 2 0 0 0 .914-3.782a1.98 1.98 0 0 0-2.414.483" />
+                    </g>
+                </svg>`,
+            },
         ];
 
         return html`
             <div class="sidebar ${this._isLiveMode() ? 'hidden' : ''}">
                 <div class="sidebar-brand">
-                    <h1>Cheating Daddy</h1>
+                    <h1>System Container</h1>
                 </div>
                 <nav class="sidebar-nav">
-                    ${items.map(item => html`
-                        <button
-                            class="nav-item ${this.currentView === item.id ? 'active' : ''}"
-                            @click=${() => this.navigate(item.id)}
-                            title=${item.label}
-                        >
-                            ${item.icon}
-                            ${item.label}
-                        </button>
-                    `)}
+                    ${items.map(
+                        item => html`
+                            <button
+                                class="nav-item ${this.currentView === item.id ? 'active' : ''}"
+                                @click=${() => this.navigate(item.id)}
+                                title=${item.label}
+                            >
+                                ${item.icon} ${item.label}
+                            </button>
+                        `
+                    )}
                 </nav>
                 <div class="sidebar-footer">
-                    ${this._updateAvailable ? html`
-                        <button class="update-btn" @click=${() => this.handleExternalLinkClick('https://cheatingdaddy.com/download')}>
-                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2M7 11l5 5l5-5m-5-7v12" /></svg>
-                            Update available
-                        </button>
-                    ` : html`
-                        <div class="version-text">v${this._localVersion}</div>
-                    `}
+                    ${
+                        this._updateAvailable
+                            ? html`
+                                  <button class="update-btn" @click=${() => this.handleExternalLinkClick('https://cheatingdaddy.com/download')}>
+                                      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+                                          <path
+                                              fill="none"
+                                              stroke="currentColor"
+                                              stroke-linecap="round"
+                                              stroke-linejoin="round"
+                                              stroke-width="2"
+                                              d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2M7 11l5 5l5-5m-5-7v12"
+                                          />
+                                      </svg>
+                                      Update available
+                                  </button>
+                              `
+                            : html` <div class="version-text">v${this._localVersion}</div> `
+                    }
                 </div>
             </div>
         `;
@@ -832,17 +1001,22 @@ export class CheatingDaddyApp extends LitElement {
             exam: 'Exam',
         };
 
+        const diagnostics = this._formatGroqDiagnostics();
         return html`
             <div class="live-bar">
                 <div class="live-bar-left">
                     <button class="live-bar-back" @click=${() => this.handleClose()} title="End session">
                         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
-                            <path fill-rule="evenodd" d="M12.79 5.23a.75.75 0 0 1-.02 1.06L8.832 10l3.938 3.71a.75.75 0 1 1-1.04 1.08l-4.5-4.25a.75.75 0 0 1 0-1.08l4.5-4.25a.75.75 0 0 1 1.06.02Z" clip-rule="evenodd" />
+                            <path
+                                fill-rule="evenodd"
+                                d="M12.79 5.23a.75.75 0 0 1-.02 1.06L8.832 10l3.938 3.71a.75.75 0 1 1-1.04 1.08l-4.5-4.25a.75.75 0 0 1 0-1.08l4.5-4.25a.75.75 0 0 1 1.06.02Z"
+                                clip-rule="evenodd"
+                            />
                         </svg>
                     </button>
                 </div>
                 <div class="live-bar-center">
-                    ${profileLabels[this.selectedProfile] || 'Session'}
+                    Active: ${this.activeProfileName || profileLabels[this.selectedProfile] || 'Session'} · ${this.activeLanguageName}
                 </div>
                 <div class="live-bar-right">
                     ${this.statusText ? html`<span class="live-bar-text">${this.statusText}</span>` : ''}
@@ -851,17 +1025,57 @@ export class CheatingDaddyApp extends LitElement {
                     <span class="live-bar-text clickable" @click=${() => this.handleHideToggle()}>[hide]</span>
                 </div>
             </div>
+            ${
+                diagnostics.length
+                    ? html`<div class="live-diagnostics" title=${diagnostics.join(' · ')}>
+                          ${diagnostics.map(item => html`<span class="live-diagnostic-item">${item}</span>`)}
+                      </div>`
+                    : ''
+            }
         `;
+    }
+
+    _formatGroqDiagnostics() {
+        const plan = this._groqSessionPlan;
+        if (!plan) return [];
+        const metric = this._groqMetric;
+        if (!metric) {
+            return [
+                plan.model,
+                `context ${plan.contextEnabled ? `up to ${plan.contextPairLimit} pairs` : 'off'}`,
+                `prompt ~${plan.estimatedPromptTokens} tokens`,
+                `answer reserve ${plan.minimumAnswerTokens}+`,
+                `TPM ${plan.provisionalTpmLimit} provisional`,
+            ];
+        }
+
+        const usage = metric.usage;
+        const tokenLimits = metric.rateLimits?.tokens;
+        const cacheRatio =
+            usage?.cachedTokens !== null && usage?.promptTokens > 0
+                ? `${usage.cachedTokens}/${usage.promptTokens} (${Math.round((usage.cachedTokens / usage.promptTokens) * 100)}%)`
+                : 'not reported';
+        const quota =
+            tokenLimits?.remaining !== null && tokenLimits?.remaining !== undefined
+                ? `${tokenLimits.remaining}${tokenLimits.reset ? `, reset ${tokenLimits.reset}` : ''}`
+                : 'not reported';
+        const value = number => (number === null || number === undefined ? 'not reported' : number);
+
+        return [
+            metric.actualModel || metric.selectedModel || plan.model,
+            `context ${value(metric.includedPairs)} pairs${metric.trimmedMessages ? `, ${metric.trimmedMessages} messages trimmed` : ''}`,
+            `input est ${value(metric.estimatedInputTokens)} / actual ${value(usage?.promptTokens)}`,
+            `output planned ${value(metric.plannedCompletionTokens)} / actual ${value(usage?.completionTokens)}`,
+            `cache ${cacheRatio}`,
+            `TTFT ${value(metric.timings?.firstContentMs)} ms / total ${value(metric.timings?.totalMs)} ms`,
+            `TPM remaining ${quota}`,
+        ];
     }
 
     render() {
         // Onboarding is fullscreen, no sidebar
         if (this.currentView === 'onboarding') {
-            return html`
-                <div class="fullscreen">
-                    ${this.renderCurrentView()}
-                </div>
-            `;
+            return html` <div class="fullscreen">${this.renderCurrentView()}</div> `;
         }
 
         const isLive = this._isLiveMode();
@@ -879,9 +1093,7 @@ export class CheatingDaddyApp extends LitElement {
                 ${this.renderSidebar()}
                 <div class="content">
                     ${isLive ? this.renderLiveBar() : ''}
-                    <div class="content-inner ${isLive ? 'live' : ''}">
-                        ${this.renderCurrentView()}
-                    </div>
+                    <div class="content-inner ${isLive ? 'live' : ''}">${this.renderCurrentView()}</div>
                 </div>
             </div>
         `;

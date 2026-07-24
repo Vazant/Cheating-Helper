@@ -19,6 +19,11 @@ app.whenReady().then(async () => {
     // Initialize storage (checks version, resets if needed)
     storage.initializeStorage();
 
+    // Register IPC before creating the window so renderer invokes never race
+    setupGeminiIpcHandlers(geminiSessionRef);
+    setupStorageIpcHandlers();
+    setupGeneralIpcHandlers();
+
     // Trigger screen recording permission prompt on macOS if not already granted
     if (process.platform === 'darwin') {
         const { desktopCapturer } = require('electron');
@@ -26,9 +31,6 @@ app.whenReady().then(async () => {
     }
 
     createMainWindow();
-    setupGeminiIpcHandlers(geminiSessionRef);
-    setupStorageIpcHandlers();
-    setupGeneralIpcHandlers();
 });
 
 app.on('window-all-closed', () => {
@@ -137,6 +139,25 @@ function setupStorageIpcHandlers() {
         }
     });
 
+    ipcMain.handle('storage:get-groq-api-keys', async () => {
+        try {
+            return { success: true, data: storage.getGroqApiKeys() };
+        } catch (error) {
+            console.error('Error getting Groq API keys:', error);
+            return { success: false, error: error.message };
+        }
+    });
+
+    ipcMain.handle('storage:set-groq-api-keys', async (event, groqApiKeys) => {
+        try {
+            storage.setGroqApiKeys(groqApiKeys);
+            return { success: true };
+        } catch (error) {
+            console.error('Error setting Groq API keys:', error);
+            return { success: false, error: error.message };
+        }
+    });
+
     // ============ PREFERENCES ============
     ipcMain.handle('storage:get-preferences', async () => {
         try {
@@ -163,6 +184,62 @@ function setupStorageIpcHandlers() {
             return { success: true };
         } catch (error) {
             console.error('Error updating preference:', error);
+            return { success: false, error: error.message };
+        }
+    });
+
+    ipcMain.handle('storage:create-ai-profile', async (event, sourceId, name) => {
+        try {
+            return { success: true, data: storage.createAiProfile(sourceId, name) };
+        } catch (error) {
+            return { success: false, error: error.message };
+        }
+    });
+
+    ipcMain.handle('storage:update-ai-profile', async (event, id, patch) => {
+        try {
+            return { success: true, data: storage.updateAiProfile(id, patch) };
+        } catch (error) {
+            return { success: false, error: error.message };
+        }
+    });
+
+    ipcMain.handle('storage:delete-ai-profile', async (event, id) => {
+        try {
+            return { success: true, data: storage.deleteAiProfile(id) };
+        } catch (error) {
+            return { success: false, error: error.message };
+        }
+    });
+
+    ipcMain.handle('storage:import-ai-profile', async (event, jsonText) => {
+        try {
+            return { success: true, data: storage.importAiProfile(jsonText) };
+        } catch (error) {
+            return { success: false, error: error.message };
+        }
+    });
+
+    ipcMain.handle('storage:compile-ai-profile', async (event, profile) => {
+        try {
+            const { compileProfile } = require('./utils/aiProfiles');
+            return { success: true, data: compileProfile(profile, { language: storage.getPreferences().selectedLanguage }) };
+        } catch (error) {
+            return { success: false, error: error.message };
+        }
+    });
+
+    ipcMain.handle('storage:plan-ai-profile', async (event, profile) => {
+        try {
+            const { compileProfile } = require('./utils/aiProfiles');
+            const { buildGroqProfilePlan } = require('./utils/groq');
+            const preferences = storage.getPreferences();
+            const prompt = compileProfile(profile, { language: preferences.selectedLanguage });
+            return {
+                success: true,
+                data: buildGroqProfilePlan(prompt, profile?.behavior, preferences.hostedTextModel),
+            };
+        } catch (error) {
             return { success: false, error: error.message };
         }
     });

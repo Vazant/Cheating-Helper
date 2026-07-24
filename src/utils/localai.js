@@ -1,6 +1,9 @@
 const { Ollama } = require('ollama');
 const { getSystemPrompt } = require('./prompts');
 const { sendToRenderer, initializeNewSession, saveConversationTurn } = require('./gemini');
+const { hasVisionCapability } = require('./vision');
+const { getLanguageConfig } = require('./aiProfiles');
+const { createResponseId, createResponsePayload, createResponseUpdate } = require('./responsePayload');
 
 // ── State ──
 
@@ -11,6 +14,7 @@ let isWhisperLoading = false;
 let localConversationHistory = [];
 let currentSystemPrompt = null;
 let isLocalActive = false;
+let speechLanguage = 'en';
 
 // VAD state
 let isSpeaking = false;
@@ -166,7 +170,7 @@ async function transcribeAudio(pcm16kBuffer) {
         // Whisper expects audio at 16kHz which is what we have
         const result = await whisperPipeline(float32Audio, {
             sampling_rate: 16000,
-            language: 'en',
+            language: speechLanguage,
             task: 'transcribe',
         });
 
@@ -224,10 +228,7 @@ async function sendToOllama(transcription) {
     }
 
     try {
-        const messages = [
-            { role: 'system', content: currentSystemPrompt || 'You are a helpful assistant.' },
-            ...localConversationHistory,
-        ];
+        const messages = [{ role: 'system', content: currentSystemPrompt || 'You are a helpful assistant.' }, ...localConversationHistory];
 
         const response = await ollamaClient.chat({
             model: ollamaModel,
@@ -237,12 +238,16 @@ async function sendToOllama(transcription) {
 
         let fullText = '';
         let isFirst = true;
+        const responseId = createResponseId();
 
         for await (const part of response) {
             const token = part.message?.content || '';
             if (token) {
                 fullText += token;
-                sendToRenderer(isFirst ? 'new-response' : 'update-response', fullText);
+                sendToRenderer(
+                    isFirst ? 'new-response' : 'update-response',
+                    isFirst ? createResponsePayload(fullText, transcription, responseId) : createResponseUpdate(fullText, responseId)
+                );
                 isFirst = false;
             }
         }
@@ -266,14 +271,16 @@ async function sendToOllama(transcription) {
 
 // ── Public API ──
 
-async function initializeLocalSession(ollamaHost, model, whisperModel, profile, customPrompt) {
+async function initializeLocalSession(ollamaHost, model, whisperModel, profile, customPrompt, language = 'en-US') {
     console.log('[LocalAI] Initializing local session:', { ollamaHost, model, whisperModel, profile });
 
     sendToRenderer('session-initializing', true);
 
     try {
         // Setup system prompt
-        currentSystemPrompt = getSystemPrompt(profile, customPrompt, false);
+        const languageConfig = getLanguageConfig(language);
+        speechLanguage = languageConfig.code;
+        currentSystemPrompt = getSystemPrompt(profile, customPrompt, false, [], languageConfig.locale);
 
         // Initialize Ollama client
         ollamaClient = new Ollama({ host: ollamaHost });
@@ -306,7 +313,7 @@ async function initializeLocalSession(ollamaHost, model, whisperModel, profile, 
         localConversationHistory = [];
 
         // Initialize conversation session
-        initializeNewSession(profile, customPrompt);
+        initializeNewSession(profile.id, customPrompt, { profileName: profile.name, language: languageConfig.locale });
 
         isLocalActive = true;
         sendToRenderer('session-initializing', false);
@@ -330,6 +337,25 @@ function processLocalAudio(monoChunk24k) {
     if (pcm16k.length > 0) {
         processVAD(pcm16k);
     }
+}
+
+function resetLocalAudio() {
+    isSpeaking = false;
+    speechBuffers = [];
+    silenceFrameCount = 0;
+    speechFrameCount = 0;
+    resampleRemainder = Buffer.alloc(0);
+}
+
+function flushLocalAudio() {
+    if (!isSpeaking || !speechBuffers.length) {
+        resetLocalAudio();
+        return false;
+    }
+    const audioData = Buffer.concat(speechBuffers);
+    resetLocalAudio();
+    handleSpeechEnd(audioData);
+    return audioData.length >= 16000;
 }
 
 function closeLocalSession() {
@@ -366,13 +392,31 @@ async function sendLocalText(text) {
     }
 }
 
-async function sendLocalImage(base64Data, prompt) {
-    if (!isLocalActive || !ollamaClient) {
-        return { success: false, error: 'No active local session' };
+async function listLocalVisionModels(ollamaHost) {
+    const client = new Ollama({ host: ollamaHost });
+    const listed = await client.list();
+    const models = [];
+    for (const item of listed.models || []) {
+        try {
+            const info = await client.show({ model: item.model || item.name });
+            if (hasVisionCapability(info)) models.push(item.model || item.name);
+        } catch (error) {
+            console.warn(`[LocalAI] Could not inspect ${item.model || item.name}: ${error.message}`);
+        }
     }
+    return models;
+}
+
+async function sendLocalImage(base64Data, prompt, { host, model, systemPrompt } = {}) {
+    const client = host ? new Ollama({ host }) : ollamaClient;
+    const visionModel = model || ollamaModel;
+    if (!client || !visionModel) return { success: false, error: 'Local Vision is not configured' };
 
     try {
-        console.log('[LocalAI] Sending image to Ollama');
+        const info = await client.show({ model: visionModel });
+        if (!hasVisionCapability(info)) return { success: false, error: `${visionModel} does not support images` };
+
+        console.log(`[LocalAI] Sending image to Ollama (${visionModel})`);
         sendToRenderer('update-status', 'Analyzing image...');
 
         const userMessage = {
@@ -381,45 +425,33 @@ async function sendLocalImage(base64Data, prompt) {
             images: [base64Data],
         };
 
-        // Store text-only version in history
-        localConversationHistory.push({ role: 'user', content: prompt });
+        const messages = [{ role: 'system', content: systemPrompt || currentSystemPrompt || 'You are a helpful assistant.' }, userMessage];
 
-        if (localConversationHistory.length > 20) {
-            localConversationHistory = localConversationHistory.slice(-20);
-        }
-
-        const messages = [
-            { role: 'system', content: currentSystemPrompt || 'You are a helpful assistant.' },
-            ...localConversationHistory.slice(0, -1),
-            userMessage,
-        ];
-
-        const response = await ollamaClient.chat({
-            model: ollamaModel,
+        const response = await client.chat({
+            model: visionModel,
             messages,
             stream: true,
         });
 
         let fullText = '';
         let isFirst = true;
+        const responseId = createResponseId();
 
         for await (const part of response) {
             const token = part.message?.content || '';
             if (token) {
                 fullText += token;
-                sendToRenderer(isFirst ? 'new-response' : 'update-response', fullText);
+                sendToRenderer(
+                    isFirst ? 'new-response' : 'update-response',
+                    isFirst ? createResponsePayload(fullText, '', responseId) : createResponseUpdate(fullText, responseId)
+                );
                 isFirst = false;
             }
         }
 
-        if (fullText.trim()) {
-            localConversationHistory.push({ role: 'assistant', content: fullText.trim() });
-            saveConversationTurn(prompt, fullText);
-        }
-
         console.log('[LocalAI] Image response completed');
         sendToRenderer('update-status', 'Listening...');
-        return { success: true, text: fullText, model: ollamaModel };
+        return { success: true, text: fullText, model: visionModel };
     } catch (error) {
         console.error('[LocalAI] Image error:', error);
         sendToRenderer('update-status', 'Ollama error: ' + error.message);
@@ -430,8 +462,11 @@ async function sendLocalImage(base64Data, prompt) {
 module.exports = {
     initializeLocalSession,
     processLocalAudio,
+    resetLocalAudio,
+    flushLocalAudio,
     closeLocalSession,
     isLocalSessionActive,
     sendLocalText,
     sendLocalImage,
+    listLocalVisionModels,
 };

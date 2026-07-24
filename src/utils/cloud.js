@@ -1,5 +1,6 @@
 const WebSocket = require('ws');
 const { BrowserWindow } = require('electron');
+const { createResponseId, createResponsePayload, createResponseUpdate } = require('./responsePayload');
 
 let cloudWs = null;
 let isCloudConnected = false;
@@ -8,6 +9,7 @@ let currentTranscription = '';
 let isFirstChunk = true;
 let audioChunkCount = 0;
 let onTurnComplete = null;
+let currentResponseId = null;
 
 function sendToRenderer(channel, data) {
     const windows = BrowserWindow.getAllWindows();
@@ -101,11 +103,17 @@ function handleMessage(msg) {
         case 'response_start':
             currentCloudResponse = '';
             isFirstChunk = true;
+            currentResponseId = createResponseId();
             break;
 
         case 'response_chunk':
             currentCloudResponse += msg.text;
-            sendToRenderer(isFirstChunk ? 'new-response' : 'update-response', currentCloudResponse);
+            sendToRenderer(
+                isFirstChunk ? 'new-response' : 'update-response',
+                isFirstChunk
+                    ? createResponsePayload(currentCloudResponse, currentTranscription, currentResponseId)
+                    : createResponseUpdate(currentCloudResponse, currentResponseId)
+            );
             isFirstChunk = false;
             break;
 
@@ -149,6 +157,7 @@ function sendCloudAudio(pcmBuffer) {
 
 function sendCloudText(text) {
     if (cloudWs && isCloudConnected && cloudWs.readyState === WebSocket.OPEN) {
+        currentTranscription = text.trim();
         cloudWs.send(JSON.stringify({
             type: 'test_text',
             text: text

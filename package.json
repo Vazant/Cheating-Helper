@@ -1,8 +1,8 @@
 {
-    "name": "cheating-daddy",
-    "productName": "cheating-daddy",
+    "name": "system-container",
+    "productName": "System Container",
     "version": "0.7.0",
-    "description": "cheating daddy",
+    "description": "System Container",
     "main": "src/index.js",
     "scripts": {
         "start": "electron-forge start",
@@ -12,11 +12,7 @@
         "lint": "echo \"No linting configured\""
     },
     "keywords": [
-        "cheating daddy",
-        "cheating daddy ai",
-        "cheating daddy ai assistant",
-        "cheating daddy ai assistant for interviews",
-        "cheating daddy ai assistant for interviews"
+        "system container"
     ],
     "author": {
         "name": "sohzm",

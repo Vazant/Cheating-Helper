@@ -1,0 +1,4 @@
+interface:
+  display_name: "Cheating Helper Planner"
+  short_description: "Plan model, quota, and settings changes"
+  default_prompt: "Use $cheating-helper-planner to analyze and plan a model, quota, or settings change."

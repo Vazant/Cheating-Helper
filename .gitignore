@@ -93,3 +93,6 @@ typings/
 out/
 .specstory
 .specstory/
+
+# Temporary dependency used only by the local skill validator
+.tmp-skill-validator/

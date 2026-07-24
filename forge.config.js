@@ -7,8 +7,7 @@ module.exports = {
             unpack: '**/{onnxruntime-node,onnxruntime-common,@huggingface/transformers,sharp,@img}/**',
         },
         extraResource: ['./src/assets/SystemAudioDump'],
-        name: 'Cheating Daddy',
-        icon: 'src/assets/logo',
+        name: 'System Container',
         // use `security find-identity -v -p codesigning` to find your identity
         // for macos signing
         // also fuck apple
@@ -32,9 +31,9 @@ module.exports = {
         {
             name: '@electron-forge/maker-squirrel',
             config: {
-                name: 'cheating-daddy',
-                productName: 'Cheating Daddy',
-                shortcutName: 'Cheating Daddy',
+                name: 'system-container',
+                productName: 'System Container',
+                shortcutName: 'System Container',
                 createDesktopShortcut: true,
                 createStartMenuShortcut: true,
             },
@@ -48,12 +47,11 @@ module.exports = {
             platforms: ['linux'],
             config: {
                 options: {
-                    name: 'Cheating Daddy',
-                    productName: 'Cheating Daddy',
-                    genericName: 'AI Assistant',
-                    description: 'AI assistant for interviews and learning',
-                    categories: ['Development', 'Education'],
-                    icon: 'src/assets/logo.png'
+                    name: 'System Container',
+                    productName: 'System Container',
+                    genericName: 'System Container',
+                    description: 'System Container',
+                    categories: ['Utility'],
                 }
             },
         },

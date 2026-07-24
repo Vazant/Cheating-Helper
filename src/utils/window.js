@@ -105,6 +105,7 @@ function getDefaultKeybinds() {
         scrollUp: isMac ? 'Cmd+Shift+Up' : 'Ctrl+Shift+Up',
         scrollDown: isMac ? 'Cmd+Shift+Down' : 'Ctrl+Shift+Down',
         emergencyErase: isMac ? 'Cmd+Shift+E' : 'Ctrl+Shift+E',
+        toggleSpeechCapture: 'F8',
     };
 }
 
@@ -117,6 +118,22 @@ function updateGlobalShortcuts(keybinds, mainWindow, sendToRenderer, geminiSessi
     const primaryDisplay = screen.getPrimaryDisplay();
     const { width, height } = primaryDisplay.workAreaSize;
     const moveIncrement = Math.floor(Math.min(width, height) * 0.1);
+
+    if (keybinds.toggleSpeechCapture) {
+        try {
+            const registered = globalShortcut.register(keybinds.toggleSpeechCapture, () => sendToRenderer('toggle-speech-capture'));
+            if (!registered) {
+                sendToRenderer('shortcut-registration-status', {
+                    action: 'toggleSpeechCapture',
+                    success: false,
+                    error: `Could not register ${keybinds.toggleSpeechCapture}. Choose another shortcut.`,
+                });
+            }
+        } catch (error) {
+            console.error(`Failed to register toggleSpeechCapture (${keybinds.toggleSpeechCapture}):`, error);
+            sendToRenderer('shortcut-registration-status', { action: 'toggleSpeechCapture', success: false, error: error.message });
+        }
+    }
 
     const movementActions = {
         moveUp: () => {
@@ -265,30 +282,17 @@ function updateGlobalShortcuts(keybinds, mainWindow, sendToRenderer, geminiSessi
         }
     }
 
-    // Register emergency erase shortcut
+    // Quit shortcut (legacy keybind name: emergencyErase) — exit only, never wipe data
     if (keybinds.emergencyErase) {
         try {
             globalShortcut.register(keybinds.emergencyErase, () => {
-                console.log('Emergency Erase triggered!');
-                if (mainWindow && !mainWindow.isDestroyed()) {
-                    mainWindow.hide();
-
-                    if (geminiSessionRef.current) {
-                        geminiSessionRef.current.close();
-                        geminiSessionRef.current = null;
-                    }
-
-                    sendToRenderer('clear-sensitive-data');
-
-                    setTimeout(() => {
-                        const { app } = require('electron');
-                        app.quit();
-                    }, 300);
-                }
+                console.log('Quit shortcut triggered');
+                const { app } = require('electron');
+                app.quit();
             });
-            console.log(`Registered emergencyErase: ${keybinds.emergencyErase}`);
+            console.log(`Registered quit shortcut: ${keybinds.emergencyErase}`);
         } catch (error) {
-            console.error(`Failed to register emergencyErase (${keybinds.emergencyErase}):`, error);
+            console.error(`Failed to register quit shortcut (${keybinds.emergencyErase}):`, error);
         }
     }
 }
