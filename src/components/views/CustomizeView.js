@@ -710,7 +710,8 @@ export class CustomizeView extends LitElement {
                             <option value="toggle">Start / stop with shortcut</option>
                         </select>
                         <div class="form-hint">
-                            In shortcut mode, press the configured key once to record and again to transcribe and send. Audio outside that window is ignored.
+                            In shortcut mode, press the configured key once to record and again to transcribe and send. Audio outside that window is
+                            ignored.
                         </div>
                     </div>
                     <div class="form-group">
@@ -739,7 +740,7 @@ export class CustomizeView extends LitElement {
                         <select class="control" .value=${this.hostedTextModel} @change=${this.handleHostedTextModelSelect}>
                             <option value="openai/gpt-oss-120b">GPT-OSS 120B — Quality (recommended)</option>
                             <option value="openai/gpt-oss-20b">GPT-OSS 20B — Faster</option>
-                            <option value="qwen/qwen3.6-27b">Qwen 3.6 27B — Alternative</option>
+                            <option value="qwen/qwen3.6-27b">Qwen 3.6 27B — Preview (explicit only)</option>
                         </select>
                         <div class="form-hint">Used only to generate text answers from transcripts and typed questions.</div>
                     </div>
@@ -897,9 +898,7 @@ export class CustomizeView extends LitElement {
                 <div style="margin-top: var(--space-sm);">
                     <button class="control" style="width:auto;padding:8px 10px;" @click=${this.resetKeybinds}>Reset to defaults</button>
                 </div>
-                ${this.clearStatusMessage && this.clearStatusType === 'error'
-                    ? html`<div class="status error">${this.clearStatusMessage}</div>`
-                    : ''}
+                ${this.clearStatusMessage && this.clearStatusType === 'error' ? html`<div class="status error">${this.clearStatusMessage}</div>` : ''}
             </section>
         `;
     }

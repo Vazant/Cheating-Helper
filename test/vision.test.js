@@ -36,6 +36,8 @@ assert.ok(geminiSource.includes("prefs.visionProvider === 'ollama'"));
 assert.ok(geminiSource.includes('Screenshot exceeds the 4 MB Vision limit'));
 assert.ok(geminiSource.includes('data:image/jpeg;base64'));
 assert.ok(!geminiSource.includes('getGroqFallbackOrder(prefs.groqVisionModel'));
+assert.ok(geminiSource.includes('getGroqVisionRequestOptions()'));
+assert.ok(!geminiSource.includes('max_tokens: 2048'));
 
 const localSource = fs.readFileSync(require.resolve('../src/utils/localai'), 'utf8');
 assert.ok(localSource.includes('client.show({ model: visionModel })'));

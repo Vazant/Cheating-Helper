@@ -1,12 +1,51 @@
 const DEFAULT_GROQ_MODEL = 'openai/gpt-oss-120b';
 const GROQ_MODELS = [DEFAULT_GROQ_MODEL, 'openai/gpt-oss-20b', 'qwen/qwen3.6-27b'];
+const GROQ_MODEL_CAPABILITIES = Object.freeze({
+    'openai/gpt-oss-120b': Object.freeze({ family: 'gpt-oss', reasoningEffort: 'low' }),
+    'openai/gpt-oss-20b': Object.freeze({ family: 'gpt-oss', reasoningEffort: 'low' }),
+    'qwen/qwen3.6-27b': Object.freeze({ family: 'qwen-3.6', reasoningEffort: 'none', preview: true }),
+});
 const DEFAULT_TPM_LIMIT = 8000;
 const MAX_COMPLETION_TOKENS = 2048;
 const MIN_COMPLETION_TOKENS = 1024;
 
 function getGroqFallbackOrder(selectedModel) {
     const primary = GROQ_MODELS.includes(selectedModel) ? selectedModel : DEFAULT_GROQ_MODEL;
-    return [primary, ...GROQ_MODELS.filter(model => model !== primary)];
+    if (GROQ_MODEL_CAPABILITIES[primary].family !== 'gpt-oss') return [primary];
+    return [primary, ...GROQ_MODELS.filter(model => model !== primary && GROQ_MODEL_CAPABILITIES[model].family === 'gpt-oss')];
+}
+
+function getGroqTextRequestOptions(model, maxCompletionTokens) {
+    const capability = GROQ_MODEL_CAPABILITIES[model];
+    if (!capability) throw new Error(`Unsupported Groq text model: ${model}`);
+    if (capability.family === 'gpt-oss') {
+        return {
+            temperature: 0.7,
+            reasoning_effort: capability.reasoningEffort,
+            include_reasoning: false,
+            max_completion_tokens: maxCompletionTokens,
+        };
+    }
+    return {
+        temperature: 0.7,
+        top_p: 0.8,
+        top_k: 20,
+        min_p: 0,
+        presence_penalty: 1.5,
+        reasoning_effort: 'none',
+        reasoning_format: 'hidden',
+        max_completion_tokens: maxCompletionTokens,
+    };
+}
+
+function getGroqVisionRequestOptions(maxCompletionTokens = MAX_COMPLETION_TOKENS) {
+    return {
+        temperature: 1,
+        top_p: 1,
+        reasoning_effort: 'none',
+        reasoning_format: 'hidden',
+        max_completion_tokens: maxCompletionTokens,
+    };
 }
 
 function readGroqRateLimits(headers) {
@@ -227,10 +266,13 @@ function markIncompleteResponse(text, reason) {
 module.exports = {
     DEFAULT_GROQ_MODEL,
     GROQ_MODELS,
+    GROQ_MODEL_CAPABILITIES,
     DEFAULT_TPM_LIMIT,
     MAX_COMPLETION_TOKENS,
     MIN_COMPLETION_TOKENS,
     getGroqFallbackOrder,
+    getGroqTextRequestOptions,
+    getGroqVisionRequestOptions,
     readGroqRateLimits,
     getUsedRatio,
     isNearRateLimit,

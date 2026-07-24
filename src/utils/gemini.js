@@ -19,6 +19,8 @@ const { createSpeechSegmenter, encodePcm16Wav } = require('./audioPipeline');
 const { createResponseId, createResponsePayload, createResponseUpdate } = require('./responsePayload');
 const {
     getGroqFallbackOrder,
+    getGroqTextRequestOptions,
+    getGroqVisionRequestOptions,
     readGroqRateLimits,
     getUsedRatio,
     isNearRateLimit,
@@ -544,10 +546,7 @@ async function sendToGroq(transcription, requestContext = getHostedRequestContex
                     model,
                     messages: requestPlan.messages,
                     stream: true,
-                    temperature: 0.7,
-                    ...(model.startsWith('openai/gpt-oss-')
-                        ? { reasoning_effort: 'low', include_reasoning: false, max_completion_tokens: requestPlan.maxCompletionTokens }
-                        : { max_completion_tokens: requestPlan.maxCompletionTokens }),
+                    ...getGroqTextRequestOptions(model, requestPlan.maxCompletionTokens),
                 }),
                 signal: requestContext.signal,
             });
@@ -842,8 +841,7 @@ async function sendGroqImage(base64Data, prompt, requestContext = getHostedReque
                             ],
                         },
                     ],
-                    temperature: 0.2,
-                    max_tokens: 2048,
+                    ...getGroqVisionRequestOptions(),
                 }),
                 signal: requestContext.signal,
             });

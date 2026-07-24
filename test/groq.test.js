@@ -3,6 +3,8 @@ const fs = require('fs');
 const {
     DEFAULT_GROQ_MODEL,
     getGroqFallbackOrder,
+    getGroqTextRequestOptions,
+    getGroqVisionRequestOptions,
     readGroqRateLimits,
     getUsedRatio,
     isNearRateLimit,
@@ -16,8 +18,33 @@ const {
     createSseParser,
 } = require('../src/utils/groq');
 
-assert.deepStrictEqual(getGroqFallbackOrder('openai/gpt-oss-20b'), ['openai/gpt-oss-20b', 'openai/gpt-oss-120b', 'qwen/qwen3.6-27b']);
+assert.deepStrictEqual(getGroqFallbackOrder('openai/gpt-oss-20b'), ['openai/gpt-oss-20b', 'openai/gpt-oss-120b']);
+assert.deepStrictEqual(getGroqFallbackOrder('qwen/qwen3.6-27b'), ['qwen/qwen3.6-27b']);
 assert.strictEqual(getGroqFallbackOrder('retired/model')[0], DEFAULT_GROQ_MODEL);
+assert.deepStrictEqual(getGroqTextRequestOptions(DEFAULT_GROQ_MODEL, 2048), {
+    temperature: 0.7,
+    reasoning_effort: 'low',
+    include_reasoning: false,
+    max_completion_tokens: 2048,
+});
+assert.deepStrictEqual(getGroqTextRequestOptions('qwen/qwen3.6-27b', 1024), {
+    temperature: 0.7,
+    top_p: 0.8,
+    top_k: 20,
+    min_p: 0,
+    presence_penalty: 1.5,
+    reasoning_effort: 'none',
+    reasoning_format: 'hidden',
+    max_completion_tokens: 1024,
+});
+assert.throws(() => getGroqTextRequestOptions('retired/model', 1024), /Unsupported/);
+assert.deepStrictEqual(getGroqVisionRequestOptions(1024), {
+    temperature: 1,
+    top_p: 1,
+    reasoning_effort: 'none',
+    reasoning_format: 'hidden',
+    max_completion_tokens: 1024,
+});
 
 const values = new Map([
     ['x-ratelimit-limit-requests', '1000'],
@@ -120,9 +147,8 @@ assert.strictEqual((geminiSource.match(/sendToGroq\(/g) || []).length, 3);
 assert.ok(geminiSource.includes('Groq API key required for text responses'));
 assert.ok(geminiSource.includes("ipcMain.handle('initialize-gemini', async () =>"));
 assert.ok(geminiSource.includes('Gemini initialization is temporarily disabled'));
-assert.ok(geminiSource.includes("reasoning_effort: 'low'"));
-assert.ok(geminiSource.includes('include_reasoning: false'));
-assert.ok(geminiSource.includes('max_completion_tokens: requestPlan.maxCompletionTokens'));
+assert.ok(geminiSource.includes('getGroqTextRequestOptions(model, requestPlan.maxCompletionTokens)'));
+assert.ok(geminiSource.includes('getGroqVisionRequestOptions()'));
 assert.ok(geminiSource.includes('activateGroqApiKey(groqApiKey)'));
 assert.ok(geminiSource.includes("finishReason === 'length'"));
 assert.ok(!sendToGroqSource.includes('selectedProfile'));

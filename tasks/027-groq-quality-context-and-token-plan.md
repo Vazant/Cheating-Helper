@@ -725,6 +725,8 @@ Evidence:
 
 ### Блок 7 — Model-specific parameters и явный fallback
 
+Статус блока: `IN_PROGRESS` — implementation и mocked policy checks готовы; live model matrix заблокирована решением 9
+
 Предлагаемый commit: `fix: make Groq model behavior explicit`
 
 Scope:
@@ -761,6 +763,17 @@ Regression:
 Rollback:
 
 - Capability/parameter builder и fallback policy находятся в одном изолированном commit или двух последовательных commits.
+
+Evidence:
+
+- Официальные Groq model/reasoning/API/vision docs повторно проверены 2026-07-24.
+- Capability map разделяет GPT-OSS и Qwen; неизвестный model ID нельзя превратить в request payload.
+- GPT-OSS сохраняет `reasoning_effort: low` и `include_reasoning: false`.
+- Qwen text доступен только как явный Preview choice, использует non-thinking `none` и hidden reasoning.
+- Automatic fallback ограничен `GPT-OSS 120B ↔ 20B`; Qwen не участвует в fallback.
+- Vision использует отдельный builder и `max_completion_tokens` вместо deprecated `max_tokens`.
+- Model-policy checks: 3/3 passed; полная регрессия: 34/34 tests passed.
+- Live GPT-OSS 120B/20B, Qwen text и Qwen vision matrix: `BLOCKED` до отдельного разрешения live calls.
 
 ### Блок 8 — Детерминированные multiple-key attempts
 
