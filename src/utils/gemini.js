@@ -28,6 +28,7 @@ const {
     buildGroqRequestPlan,
     readGroqSseEvent,
     createSseParser,
+    createAbortScope,
 } = require('./groq');
 
 // Lazy-loaded to avoid circular dependency (localai.js imports from gemini.js)
@@ -52,6 +53,7 @@ let speechCaptureEnabled = true;
 let groqTextQueue = Promise.resolve();
 let hostedUtteranceId = 0;
 const pendingUtteranceIds = new Set();
+const hostedRequestScope = createAbortScope();
 
 function getAiProfileSnapshot(id) {
     return JSON.parse(JSON.stringify(getAiProfile(id)));
@@ -98,6 +100,14 @@ function sendToRenderer(channel, data) {
     }
 }
 
+function getHostedRequestContext() {
+    return currentGroqSession ? hostedRequestScope.capture() : null;
+}
+
+function isHostedRequestActive(requestContext) {
+    return Boolean(currentGroqSession && requestContext?.isActive());
+}
+
 // Build context message for session restoration
 function buildContextMessage() {
     const lastTurns = conversationHistory.slice(-20);
@@ -112,6 +122,7 @@ function buildContextMessage() {
 
 // Conversation management functions
 function initializeNewSession(profile = null, customPrompt = null, metadata = {}) {
+    hostedRequestScope.start();
     currentSessionId = Date.now().toString();
     currentTranscription = '';
     conversationHistory = [];
@@ -290,17 +301,19 @@ function readGroqError(errorText) {
     }
 }
 
-function queueGroqText(text) {
-    const queued = groqTextQueue.then(() => sendToGroq(text));
+function queueGroqText(text, requestContext = getHostedRequestContext()) {
+    if (!requestContext) return Promise.resolve(false);
+    const queued = groqTextQueue.then(() => sendToGroq(text, requestContext));
     groqTextQueue = queued.catch(error => {
         console.error('[Groq text queue]', error.message);
-        sendToRenderer('update-status', `Groq request failed: ${error.message}`);
+        if (isHostedRequestActive(requestContext)) sendToRenderer('update-status', `Groq request failed: ${error.message}`);
         return false;
     });
     return queued;
 }
 
-async function transcribeGroqAudio(wavBuffer, language) {
+async function transcribeGroqAudio(wavBuffer, language, requestContext) {
+    if (!isHostedRequestActive(requestContext)) return { success: false, aborted: true };
     const groqApiKeys = getGroqApiKeySequence();
     if (!groqApiKeys.length) return { success: false, error: 'Groq API key required for speech recognition' };
 
@@ -317,15 +330,19 @@ async function transcribeGroqAudio(wavBuffer, language) {
                 method: 'POST',
                 headers: { Authorization: `Bearer ${groqApiKeys[keyIndex]}` },
                 body: form,
+                signal: requestContext.signal,
             });
         } catch (error) {
+            if (!isHostedRequestActive(requestContext) || error.name === 'AbortError') return { success: false, aborted: true };
             return { success: false, error: `Groq STT network error: ${error.message}` };
         }
 
+        if (!isHostedRequestActive(requestContext)) return { success: false, aborted: true };
         const rateLimits = readGroqRateLimits(response.headers);
         recordGroqRateLimits(rateLimits, 'whisper-large-v3-turbo', keyIndex + 1);
         if (response.ok) {
             const body = await response.json();
+            if (!isHostedRequestActive(requestContext)) return { success: false, aborted: true };
             const text = typeof body.text === 'string' ? body.text.trim() : '';
             if (!text) return { success: false, error: 'Groq STT returned an empty transcript' };
             activateGroqApiKey(groqApiKeys[keyIndex]);
@@ -333,6 +350,7 @@ async function transcribeGroqAudio(wavBuffer, language) {
         }
 
         const error = readGroqError(await response.text().catch(() => ''));
+        if (!isHostedRequestActive(requestContext)) return { success: false, aborted: true };
         if (response.status === 429 && keyIndex + 1 < groqApiKeys.length) continue;
         return { success: false, error: `Groq STT ${getGroqErrorStatus(response.status, 'whisper-large-v3-turbo', rateLimits, error.message)}` };
     }
@@ -340,19 +358,22 @@ async function transcribeGroqAudio(wavBuffer, language) {
 }
 
 async function processHostedUtterance(utteranceId, pcm16kBuffer) {
-    if (!currentGroqSession) return false;
+    const requestContext = getHostedRequestContext();
+    if (!requestContext) return false;
     if (pendingUtteranceIds.has(utteranceId)) return false;
     pendingUtteranceIds.add(utteranceId);
     try {
         sendToRenderer('update-status', 'Transcribing...');
-        const result = await transcribeGroqAudio(encodePcm16Wav(pcm16kBuffer), currentGroqSession.language);
+        const result = await transcribeGroqAudio(encodePcm16Wav(pcm16kBuffer), currentGroqSession.language, requestContext);
+        if (!isHostedRequestActive(requestContext)) return false;
         if (!result.success) {
+            if (result.aborted) return false;
             console.error('[Groq STT error]', result.error);
             sendToRenderer('update-status', result.error);
             return false;
         }
         sendToRenderer('update-status', 'Answering...');
-        return queueGroqText(result.text);
+        return queueGroqText(result.text, requestContext);
     } finally {
         pendingUtteranceIds.delete(utteranceId);
     }
@@ -392,7 +413,8 @@ function processHostedPcmBuffer(source, pcmBuffer) {
     return { success: true };
 }
 
-async function sendToGroq(transcription) {
+async function sendToGroq(transcription, requestContext = getHostedRequestContext()) {
+    if (!isHostedRequestActive(requestContext)) return false;
     const requestReceivedAt = Date.now();
     const groqApiKeys = getGroqApiKeySequence();
     if (!groqApiKeys.length) {
@@ -460,14 +482,20 @@ async function sendToGroq(transcription) {
                         ? { reasoning_effort: 'low', include_reasoning: false, max_completion_tokens: requestPlan.maxCompletionTokens }
                         : { max_completion_tokens: requestPlan.maxCompletionTokens }),
                 }),
+                signal: requestContext.signal,
             });
         } catch (error) {
             removeUserTurn();
+            if (!isHostedRequestActive(requestContext) || error.name === 'AbortError') return false;
             console.error('Groq network error:', error);
             sendToRenderer('update-status', `Groq network error: ${error.message}`);
             return false;
         }
 
+        if (!isHostedRequestActive(requestContext)) {
+            removeUserTurn();
+            return false;
+        }
         const rateLimits = readGroqRateLimits(response.headers);
         const headersReceivedAt = Date.now();
         recordGroqRateLimits(rateLimits, model, keyIndex + 1);
@@ -475,6 +503,10 @@ async function sendToGroq(transcription) {
 
         if (!response.ok) {
             const error = readGroqError(await response.text().catch(() => ''));
+            if (!isHostedRequestActive(requestContext)) {
+                removeUserTurn();
+                return false;
+            }
             const nextModel = models[index + 1];
             const fallbackReason = getGroqFallbackDecision(response.status, Boolean(nextModel));
 
@@ -544,6 +576,10 @@ async function sendToGroq(transcription) {
             return false;
         }
 
+        if (!isHostedRequestActive(requestContext)) {
+            removeUserTurn();
+            return false;
+        }
         activateGroqApiKey(groqApiKey);
 
         const reader = response.body?.getReader();
@@ -562,6 +598,7 @@ async function sendToGroq(transcription) {
         let lastRenderedText = '';
         let firstContentAt = null;
         const parser = createSseParser(data => {
+            if (!isHostedRequestActive(requestContext)) return;
             const event = readGroqSseEvent(data);
             if (!event) {
                 console.warn('Ignoring malformed Groq SSE event');
@@ -588,17 +625,26 @@ async function sendToGroq(transcription) {
             while (true) {
                 const { done, value } = await reader.read();
                 if (done) break;
+                if (!isHostedRequestActive(requestContext)) {
+                    removeUserTurn();
+                    return false;
+                }
                 parser.push(decoder.decode(value, { stream: true }));
             }
             parser.push(decoder.decode());
             parser.end();
         } catch (error) {
             removeUserTurn();
+            if (!isHostedRequestActive(requestContext) || error.name === 'AbortError') return false;
             console.error('Groq streaming error:', error);
             sendToRenderer('update-status', `Groq streaming error: ${error.message}`);
             return false;
         }
 
+        if (!isHostedRequestActive(requestContext)) {
+            removeUserTurn();
+            return false;
+        }
         const cleanedResponse = stripThinkingTags(fullText);
         if (!cleanedResponse) {
             removeUserTurn();
@@ -629,7 +675,10 @@ async function sendToGroq(transcription) {
         saveConversationTurn(transcription, cleanedResponse);
 
         if (finishReason === 'length') {
-            sendToRenderer('update-response', createResponseUpdate(`${cleanedResponse}\n\n_Response stopped because the token limit was reached._`, responseId));
+            sendToRenderer(
+                'update-response',
+                createResponseUpdate(`${cleanedResponse}\n\n_Response stopped because the token limit was reached._`, responseId)
+            );
             sendToRenderer('update-status', 'Groq response stopped at the token limit');
             return true;
         }
@@ -643,7 +692,8 @@ async function sendToGroq(transcription) {
     return false;
 }
 
-async function sendGroqImage(base64Data, prompt) {
+async function sendGroqImage(base64Data, prompt, requestContext = getHostedRequestContext()) {
+    if (!isHostedRequestActive(requestContext)) return { success: false, aborted: true };
     const groqApiKeys = getGroqApiKeySequence();
     if (!groqApiKeys.length) return { success: false, error: 'Groq API key required for screenshot analysis' };
 
@@ -671,16 +721,20 @@ async function sendGroqImage(base64Data, prompt) {
                     temperature: 0.2,
                     max_tokens: 2048,
                 }),
+                signal: requestContext.signal,
             });
         } catch (error) {
+            if (!isHostedRequestActive(requestContext) || error.name === 'AbortError') return { success: false, aborted: true };
             return { success: false, error: `Groq Vision network error: ${error.message}` };
         }
 
+        if (!isHostedRequestActive(requestContext)) return { success: false, aborted: true };
         const rateLimits = readGroqRateLimits(response.headers);
         recordGroqRateLimits(rateLimits, GROQ_VISION_MODEL, keyIndex + 1);
 
         if (response.ok) {
             const body = await response.json();
+            if (!isHostedRequestActive(requestContext)) return { success: false, aborted: true };
             const text = body.choices?.[0]?.message?.content?.trim();
             if (!text) return { success: false, error: 'Groq Vision returned an empty response' };
             activateGroqApiKey(groqApiKeys[keyIndex]);
@@ -689,6 +743,7 @@ async function sendGroqImage(base64Data, prompt) {
         }
 
         const error = readGroqError(await response.text().catch(() => ''));
+        if (!isHostedRequestActive(requestContext)) return { success: false, aborted: true };
         console.error('[Groq Vision error]', {
             provider: 'groq',
             model: GROQ_VISION_MODEL,
@@ -1457,6 +1512,8 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
 
     ipcMain.handle('close-session', async event => {
         try {
+            hostedRequestScope.stop();
+            currentSessionId = null;
             stopMacOSAudioCapture();
             hostedAudioSegmenter?.reset();
             hostedAudioSegmenter = null;

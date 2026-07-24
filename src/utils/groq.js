@@ -156,6 +156,28 @@ function createSseParser(onData) {
     };
 }
 
+function createAbortScope() {
+    let controller = null;
+    return {
+        start() {
+            controller?.abort();
+            controller = new AbortController();
+        },
+        stop() {
+            controller?.abort();
+            controller = null;
+        },
+        capture() {
+            const captured = controller;
+            if (!captured) return null;
+            return {
+                signal: captured.signal,
+                isActive: () => controller === captured && !captured.signal.aborted,
+            };
+        },
+    };
+}
+
 module.exports = {
     DEFAULT_GROQ_MODEL,
     GROQ_MODELS,
@@ -175,4 +197,5 @@ module.exports = {
     buildGroqRequestPlan,
     readGroqSseEvent,
     createSseParser,
+    createAbortScope,
 };

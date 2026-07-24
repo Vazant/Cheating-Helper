@@ -468,7 +468,7 @@ Evidence:
 
 ### Блок 2 — Session ownership и отмена устаревших запросов
 
-Статус блока: `IN_PROGRESS`
+Статус блока: `IN_PROGRESS` — implementation и automated checks готовы; live Groq smoke заблокирован решением 9
 
 Предлагаемый commit: `fix: isolate Groq requests from stopped sessions`
 
@@ -502,6 +502,16 @@ Regression:
 Rollback:
 
 - Один изолированный commit.
+
+Evidence:
+
+- Text, STT и Vision получают общий session-owned AbortSignal.
+- Новый Start и Stop отменяют предыдущий scope; устаревшие callbacks не меняют UI, history или active key.
+- Renderer игнорирует ожидаемый screenshot abort.
+- Session ownership checks: 3/3 passed.
+- Полная регрессия: 19/19 tests passed.
+- `npm.cmd run package`: passed для Windows x64.
+- Manual Stop/Restart во время реального Groq STT/stream: `BLOCKED` до отдельного разрешения live calls.
 
 ### Блок 3 — Единая политика incomplete и failed turns
 

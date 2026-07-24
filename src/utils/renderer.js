@@ -624,7 +624,7 @@ async function captureScreenshot(imageQuality = 'medium', isManual = false) {
 
                 if (result.success) {
                     console.log(`Image sent successfully (${offscreenCanvas.width}x${offscreenCanvas.height})`);
-                } else {
+                } else if (!result.aborted) {
                     console.error('Failed to send image:', result.error);
                 }
             };
@@ -725,7 +725,7 @@ async function captureManualScreenshot(imageQuality = null) {
                 if (result.success) {
                     console.log(`Image response completed from ${result.model}`);
                     // Response already displayed via streaming events (new-response/update-response)
-                } else {
+                } else if (!result.aborted) {
                     console.error('Failed to get image response:', result.error);
                     cheatingDaddy.addNewResponse(`Error: ${result.error}`);
                 }
