@@ -9,6 +9,22 @@ const EPAM_HR_PROFILE_V2 = normalizeProfile(require('../profiles/epam-hr-call.js
 
 const CONFIG_VERSION = 1;
 const HOSTED_TEXT_MODELS = new Set(GROQ_MODELS);
+const KEYBIND_ACTIONS = new Set([
+    'moveUp',
+    'moveDown',
+    'moveLeft',
+    'moveRight',
+    'toggleVisibility',
+    'toggleClickThrough',
+    'nextStep',
+    'previousResponse',
+    'nextResponse',
+    'scrollUp',
+    'scrollDown',
+    'emergencyErase',
+    'toggleSystemAudio',
+    'toggleMicrophone',
+]);
 
 function normalizeHostedTextModel(model) {
     if (HOSTED_TEXT_MODELS.has(model)) return model;
@@ -57,7 +73,17 @@ function normalizeAudioMode(value) {
 }
 
 function normalizeSpeechCaptureMode(value) {
-    return value === 'toggle' ? 'toggle' : 'always';
+    return value === 'always' ? 'always' : 'toggle';
+}
+
+function normalizeFontSize(value) {
+    const numeric = Number(value);
+    return Number.isFinite(numeric) ? Math.min(32, Math.max(12, Math.round(numeric))) : 20;
+}
+
+function normalizeBackgroundTransparency(value) {
+    const numeric = Number(value);
+    return Number.isFinite(numeric) ? Math.min(1, Math.max(0, numeric)) : 0.8;
 }
 
 const DEFAULT_PREFERENCES = {
@@ -69,8 +95,10 @@ const DEFAULT_PREFERENCES = {
     selectedImageQuality: 'medium',
     advancedMode: false,
     audioMode: 'speaker_only',
-    speechCaptureMode: 'always',
-    fontSize: 'medium',
+    speechCaptureMode: 'toggle',
+    speechCaptureModeVersion: 2,
+    microphoneDeviceId: '',
+    fontSize: 20,
     backgroundTransparency: 0.8,
     googleSearchEnabled: false,
     hostedTextModel: DEFAULT_GROQ_MODEL,
@@ -150,41 +178,46 @@ function readJsonFile(filePath, defaultValue) {
         }
     } catch (error) {
         console.warn(`Error reading ${filePath}:`, error.message);
+        const backupPath = `${filePath}.bak`;
+        try {
+            if (fs.existsSync(backupPath)) {
+                console.warn(`Recovering ${filePath} from its last valid backup`);
+                return JSON.parse(fs.readFileSync(backupPath, 'utf8'));
+            }
+        } catch (backupError) {
+            console.warn(`Error reading backup ${backupPath}:`, backupError.message);
+        }
     }
     return defaultValue;
 }
 
 // Helper to write JSON file safely
 function writeJsonFile(filePath, data) {
+    const dir = path.dirname(filePath);
+    const temporaryPath = `${filePath}.${process.pid}.tmp`;
     try {
-        const dir = path.dirname(filePath);
         if (!fs.existsSync(dir)) {
             fs.mkdirSync(dir, { recursive: true });
         }
-        fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf8');
+        const serialized = JSON.stringify(data, null, 2);
+        fs.writeFileSync(temporaryPath, serialized, 'utf8');
+        JSON.parse(fs.readFileSync(temporaryPath, 'utf8'));
+        fs.renameSync(temporaryPath, filePath);
+        JSON.parse(fs.readFileSync(filePath, 'utf8'));
+        fs.copyFileSync(filePath, `${filePath}.bak`);
         return true;
     } catch (error) {
+        try {
+            if (fs.existsSync(temporaryPath)) fs.unlinkSync(temporaryPath);
+        } catch {
+            // Preserve the original write error.
+        }
         console.error(`Error writing ${filePath}:`, error.message);
-        return false;
+        throw error;
     }
 }
 
-// Check if we need to reset (no configVersion or wrong version)
-function needsReset() {
-    const configPath = getConfigPath();
-    if (!fs.existsSync(configPath)) {
-        return true;
-    }
-
-    try {
-        const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-        return !config.configVersion || config.configVersion !== CONFIG_VERSION;
-    } catch {
-        return true;
-    }
-}
-
-// Wipe and reinitialize the config directory
+// Wipe and reinitialize only after the user explicitly chooses Clear All Data.
 function resetConfigDir() {
     const configDir = getConfigDir();
 
@@ -210,14 +243,26 @@ function resetConfigDir() {
 
 // Initialize storage - call this on app startup
 function initializeStorage() {
-    if (needsReset()) {
-        resetConfigDir();
-    } else {
-        // Ensure history directory exists
-        const historyDir = getHistoryDir();
-        if (!fs.existsSync(historyDir)) {
-            fs.mkdirSync(historyDir, { recursive: true });
-        }
+    fs.mkdirSync(getConfigDir(), { recursive: true });
+    fs.mkdirSync(getHistoryDir(), { recursive: true });
+    if (!fs.existsSync(getConfigPath())) writeJsonFile(getConfigPath(), DEFAULT_CONFIG);
+    else setConfig({ configVersion: CONFIG_VERSION });
+    if (!fs.existsSync(getCredentialsPath())) writeJsonFile(getCredentialsPath(), DEFAULT_CREDENTIALS);
+    if (!fs.existsSync(getPreferencesPath())) writeJsonFile(getPreferencesPath(), DEFAULT_PREFERENCES);
+    if (!fs.existsSync(getProfilesPath())) writeJsonFile(getProfilesPath(), DEFAULT_PROFILE_STORE);
+
+    const savedPreferences = readJsonFile(getPreferencesPath(), {});
+    if (savedPreferences.speechCaptureModeVersion !== 2) {
+        setPreferences({ speechCaptureMode: 'toggle', speechCaptureModeVersion: 2 });
+    }
+    const savedKeybinds = getKeybinds();
+    if (savedKeybinds?.toggleSpeechCapture) {
+        const { toggleSpeechCapture, ...currentKeybinds } = savedKeybinds;
+        setKeybinds({
+            ...currentKeybinds,
+            toggleSystemAudio: currentKeybinds.toggleSystemAudio || toggleSpeechCapture,
+            toggleMicrophone: currentKeybinds.toggleMicrophone || 'F9',
+        });
     }
 
     const credentials = getCredentials();
@@ -314,6 +359,9 @@ function getPreferences() {
         ...saved,
         audioMode: normalizeAudioMode(saved.audioMode),
         speechCaptureMode: normalizeSpeechCaptureMode(saved.speechCaptureMode),
+        microphoneDeviceId: typeof saved.microphoneDeviceId === 'string' ? saved.microphoneDeviceId : '',
+        fontSize: normalizeFontSize(saved.fontSize),
+        backgroundTransparency: normalizeBackgroundTransparency(saved.backgroundTransparency),
         hostedTextModel: normalizeHostedTextModel(saved.hostedTextModel),
         visionProvider: normalizeVisionProvider(saved.visionProvider),
         groqVisionModel: GROQ_VISION_MODEL,
@@ -336,17 +384,24 @@ function persistPreferences(preferences) {
     persisted.visionProvider = normalizeVisionProvider(persisted.visionProvider);
     persisted.audioMode = normalizeAudioMode(persisted.audioMode);
     persisted.speechCaptureMode = normalizeSpeechCaptureMode(persisted.speechCaptureMode);
+    persisted.microphoneDeviceId = typeof persisted.microphoneDeviceId === 'string' ? persisted.microphoneDeviceId : '';
+    persisted.fontSize = normalizeFontSize(persisted.fontSize);
+    persisted.backgroundTransparency = normalizeBackgroundTransparency(persisted.backgroundTransparency);
     persisted.groqVisionModel = GROQ_VISION_MODEL;
     return writeJsonFile(getPreferencesPath(), persisted);
 }
 
 function setPreferences(preferences) {
+    if (!preferences || typeof preferences !== 'object' || Array.isArray(preferences)) throw new Error('Preferences must be an object');
+    const unknownKey = Object.keys(preferences).find(key => !Object.hasOwn(DEFAULT_PREFERENCES, key));
+    if (unknownKey) throw new Error(`Unknown preference "${unknownKey}"`);
     const current = getPreferences();
     const { availableProfiles, ...persistedCurrent } = current;
     return persistPreferences({ ...persistedCurrent, ...preferences });
 }
 
 function updatePreference(key, value) {
+    if (!Object.hasOwn(DEFAULT_PREFERENCES, key)) throw new Error(`Unknown preference "${key}"`);
     const preferences = getPreferences();
     preferences[key] =
         key === 'hostedTextModel'
@@ -357,7 +412,15 @@ function updatePreference(key, value) {
                 ? normalizeAudioMode(value)
                 : key === 'speechCaptureMode'
                   ? normalizeSpeechCaptureMode(value)
-                  : value;
+                  : key === 'microphoneDeviceId'
+                    ? typeof value === 'string'
+                        ? value
+                        : ''
+                    : key === 'fontSize'
+                      ? normalizeFontSize(value)
+                      : key === 'backgroundTransparency'
+                        ? normalizeBackgroundTransparency(value)
+                        : value;
     if (key === 'groqVisionModel') preferences[key] = GROQ_VISION_MODEL;
     return persistPreferences(preferences);
 }
@@ -508,7 +571,19 @@ function getKeybinds() {
 }
 
 function setKeybinds(keybinds) {
-    return writeJsonFile(getKeybindsPath(), keybinds);
+    if (keybinds === null) return writeJsonFile(getKeybindsPath(), null);
+    if (!keybinds || typeof keybinds !== 'object' || Array.isArray(keybinds)) throw new Error('Shortcuts must be an object');
+    const entries = Object.entries(keybinds);
+    const unknown = entries.find(([action]) => !KEYBIND_ACTIONS.has(action));
+    if (unknown) throw new Error(`Unknown shortcut action "${unknown[0]}"`);
+    if (entries.some(([, accelerator]) => typeof accelerator !== 'string' || !accelerator.trim() || accelerator.length > 64)) {
+        throw new Error('Every shortcut must be a non-empty accelerator');
+    }
+    const normalized = entries.map(([action, accelerator]) => [action, accelerator.trim()]);
+    if (new Set(normalized.map(([, accelerator]) => accelerator.toLocaleLowerCase())).size !== normalized.length) {
+        throw new Error('Shortcuts must be unique');
+    }
+    return writeJsonFile(getKeybindsPath(), Object.fromEntries(normalized));
 }
 
 // ============ LIMITS (Rate Limiting) ============

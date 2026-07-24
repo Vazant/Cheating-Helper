@@ -15,7 +15,7 @@ const {
 const { connectCloud, sendCloudAudio, sendCloudText, sendCloudImage, closeCloud, isCloudActive, setOnTurnComplete } = require('./cloud');
 const { GROQ_VISION_MODEL, buildVisionPrompt } = require('./vision');
 const { getLanguageConfig } = require('./aiProfiles');
-const { createSpeechSegmenter, encodePcm16Wav } = require('./audioPipeline');
+const { createSpeechSegmenter, createManualAudioChunker, joinTranscriptParts, encodePcm16Wav } = require('./audioPipeline');
 const { createResponseId, createResponsePayload, createResponseUpdate } = require('./responsePayload');
 const {
     getGroqFallbackOrder,
@@ -56,6 +56,9 @@ let hostedAudioSegmenter = null;
 let hostedAudioSource = 'system';
 let hostedAudioQueue = Promise.resolve();
 let speechCaptureEnabled = true;
+let speechCaptureMode = 'toggle';
+let activeManualAudioSession = null;
+let manualAudioSessionId = 0;
 let groqTextQueue = Promise.resolve();
 let hostedUtteranceId = 0;
 const pendingUtteranceIds = new Set();
@@ -457,12 +460,120 @@ function configureHostedAudio(audioMode) {
     });
 }
 
-function processHostedAudioChunk(source, data, mimeType) {
-    if (!speechCaptureEnabled) return { success: true, ignored: true };
-    if (!hostedAudioSegmenter || source !== hostedAudioSource) return { success: true, ignored: true };
-    if (mimeType !== 'audio/pcm;rate=24000' || typeof data !== 'string') return { success: false, error: 'Unsupported audio format' };
-    const pcmBuffer = Buffer.from(data, 'base64');
-    return processHostedPcmBuffer(source, pcmBuffer);
+function clearManualAudioSession(session = activeManualAudioSession) {
+    if (!session) return;
+    session.chunker.reset();
+    for (const chunk of session.chunks) chunk.audio = null;
+    if (activeManualAudioSession === session) activeManualAudioSession = null;
+}
+
+async function transcribeManualChunk(session, chunk) {
+    if (currentProviderMode === 'local') {
+        const text = await getLocalAi().transcribeLocalChunk(chunk.audio);
+        return text ? { success: true, text } : { success: false, error: 'Local Whisper returned an empty transcript' };
+    }
+
+    return transcribeGroqAudio(encodePcm16Wav(chunk.audio), currentGroqSession?.language, session.requestContext);
+}
+
+function queueManualAudioChunk(session, audio) {
+    const chunk = { sequence: session.chunks.length, audio: Buffer.from(audio), result: null };
+    session.chunks.push(chunk);
+    session.queue = session.queue.then(async () => {
+        if (activeManualAudioSession !== session) return;
+        try {
+            chunk.result = await transcribeManualChunk(session, chunk);
+        } catch (error) {
+            chunk.result = { success: false, error: error.message };
+        }
+    });
+}
+
+function startManualSpeechCapture(source) {
+    if (speechCaptureMode !== 'toggle') return { success: false, error: 'Toggle-to-talk is not enabled' };
+    if (!['system', 'microphone'].includes(source)) return { success: false, error: 'Unsupported audio source' };
+    if (activeManualAudioSession) {
+        return {
+            success: false,
+            error: `${activeManualAudioSession.source === 'system' ? 'System Audio' : 'Microphone'} recording is already active`,
+        };
+    }
+
+    const session = {
+        id: ++manualAudioSessionId,
+        source,
+        state: 'recording',
+        chunks: [],
+        queue: Promise.resolve(),
+        requestContext: currentProviderMode === 'local' ? null : getHostedRequestContext(),
+        chunker: null,
+    };
+    if (currentProviderMode !== 'local' && !session.requestContext) return { success: false, error: 'No active hosted session' };
+    session.chunker = createManualAudioChunker({ onChunk: audio => queueManualAudioChunk(session, audio) });
+    activeManualAudioSession = session;
+    speechCaptureEnabled = true;
+    sendToRenderer('update-status', `Recording ${source === 'system' ? 'System Audio' : 'Microphone'}...`);
+    return { success: true, sessionId: session.id };
+}
+
+function dispatchFinalTranscript(session, transcript) {
+    sendToRenderer('update-status', 'Answering...');
+    if (currentProviderMode === 'local') {
+        getLocalAi()
+            .sendLocalTranscript(transcript)
+            .catch(error => sendToRenderer('update-status', `Local AI error: ${error.message}`));
+    } else {
+        queueGroqText(transcript, session.requestContext).catch(error => sendToRenderer('update-status', `Groq request failed: ${error.message}`));
+    }
+}
+
+async function finalizeManualSpeechCapture(source, retryFailedOnly = false) {
+    const session = activeManualAudioSession;
+    if (!session || session.source !== source) return { success: false, error: 'No matching recording is active' };
+    if (session.state === 'finalizing') return { success: false, error: 'Recording is already being processed' };
+
+    session.state = 'finalizing';
+    speechCaptureEnabled = false;
+    if (!retryFailedOnly) session.chunker.flush();
+    sendToRenderer('update-status', 'Transcribing...');
+    await session.queue;
+    if (activeManualAudioSession !== session) return { success: false, error: 'Recording session was cancelled' };
+
+    if (retryFailedOnly) {
+        for (const chunk of session.chunks.filter(item => !item.result?.success)) {
+            chunk.result = await transcribeManualChunk(session, chunk);
+        }
+    }
+
+    const failed = session.chunks.find(chunk => !chunk.result?.success);
+    if (failed) {
+        session.state = 'failed';
+        const error = failed.result?.error || `Speech recognition failed for part ${failed.sequence + 1}`;
+        const retryMessage = `${error}. Press the same shortcut to retry.`;
+        sendToRenderer('update-status', retryMessage);
+        return { success: false, retryable: true, error: retryMessage };
+    }
+
+    const transcript = joinTranscriptParts(session.chunks.map(chunk => chunk.result.text));
+    if (!transcript) {
+        clearManualAudioSession(session);
+        sendToRenderer('update-status', 'No speech detected');
+        return { success: true, queued: false };
+    }
+
+    clearManualAudioSession(session);
+    dispatchFinalTranscript(session, transcript);
+    return { success: true, queued: true };
+}
+
+function processManualAudioBuffer(source, pcmBuffer) {
+    const session = activeManualAudioSession;
+    if (!speechCaptureEnabled || !session || session.state !== 'recording' || session.source !== source) {
+        return { success: true, ignored: true };
+    }
+    if (!pcmBuffer.length || pcmBuffer.length % 2 || pcmBuffer.length > 24000 * 2) return { success: false, error: 'Invalid audio chunk' };
+    session.chunker.push(pcmBuffer);
+    return { success: true };
 }
 
 function processHostedPcmBuffer(source, pcmBuffer) {
@@ -471,6 +582,25 @@ function processHostedPcmBuffer(source, pcmBuffer) {
     if (!pcmBuffer.length || pcmBuffer.length % 2 || pcmBuffer.length > 24000 * 2) return { success: false, error: 'Invalid audio chunk' };
     hostedAudioSegmenter.push(pcmBuffer);
     return { success: true };
+}
+
+function processIncomingPcmBuffer(source, pcmBuffer) {
+    if (speechCaptureMode === 'toggle') return processManualAudioBuffer(source, pcmBuffer);
+    if (!speechCaptureEnabled || source !== hostedAudioSource) return { success: true, ignored: true };
+    if (currentProviderMode === 'cloud') {
+        sendCloudAudio(pcmBuffer);
+        return { success: true };
+    }
+    if (currentProviderMode === 'local') {
+        getLocalAi().processLocalAudio(pcmBuffer);
+        return { success: true };
+    }
+    return processHostedPcmBuffer(source, pcmBuffer);
+}
+
+function processIncomingAudioContent(source, data, mimeType) {
+    if (mimeType !== 'audio/pcm;rate=24000' || typeof data !== 'string') return { success: false, error: 'Unsupported audio format' };
+    return processIncomingPcmBuffer(source, Buffer.from(data, 'base64'));
 }
 
 async function sendToGroq(transcription, requestContext = getHostedRequestContext()) {
@@ -1245,13 +1375,7 @@ async function startMacOSAudioCapture(geminiSessionRef) {
 
             const monoChunk = CHANNELS === 2 ? convertStereoToMono(chunk) : chunk;
 
-            if (currentProviderMode === 'cloud') {
-                sendCloudAudio(monoChunk);
-            } else if (currentProviderMode === 'local') {
-                if (speechCaptureEnabled) getLocalAi().processLocalAudio(monoChunk);
-            } else {
-                processHostedPcmBuffer('system', monoChunk);
-            }
+            processIncomingPcmBuffer('system', monoChunk);
 
             if (process.env.DEBUG_AUDIO) {
                 console.log(`Processed audio chunk: ${chunk.length} bytes`);
@@ -1424,7 +1548,9 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
             tpmLimit: null,
         };
         configureHostedAudio(prefs.audioMode);
-        speechCaptureEnabled = prefs.speechCaptureMode !== 'toggle';
+        speechCaptureMode = prefs.speechCaptureMode;
+        speechCaptureEnabled = speechCaptureMode === 'always';
+        clearManualAudioSession();
         initializeNewSession(selectedProfile.id, currentSystemPrompt, { profileName: selectedProfile.name, language: language.locale });
         sessionParams = null;
         geminiSessionRef.current = null;
@@ -1440,7 +1566,11 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
     ipcMain.handle('initialize-local', async (event, ollamaHost, ollamaModel, whisperModel, profile, customPrompt, language = 'en-US') => {
         currentProviderMode = 'local';
         currentGroqSession = null;
-        speechCaptureEnabled = getPreferences().speechCaptureMode !== 'toggle';
+        const prefs = getPreferences();
+        speechCaptureMode = prefs.speechCaptureMode;
+        hostedAudioSource = prefs.audioMode === 'mic_only' ? 'microphone' : 'system';
+        speechCaptureEnabled = speechCaptureMode === 'always';
+        clearManualAudioSession();
         const selectedProfile = getAiProfileSnapshot(profile);
         const languageConfig = getLanguageConfig(language);
         currentSystemPrompt = getSystemPrompt(selectedProfile, '', false, [], languageConfig.locale);
@@ -1459,54 +1589,22 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
     });
 
     ipcMain.handle('send-audio-content', async (event, { data, mimeType }) => {
-        if (!speechCaptureEnabled) return { success: true, ignored: true };
-        if (currentProviderMode === 'cloud') {
-            try {
-                const pcmBuffer = Buffer.from(data, 'base64');
-                sendCloudAudio(pcmBuffer);
-                return { success: true };
-            } catch (error) {
-                console.error('Error sending cloud audio:', error);
-                return { success: false, error: error.message };
-            }
+        try {
+            return processIncomingAudioContent('system', data, mimeType);
+        } catch (error) {
+            console.error('Error processing system audio:', error);
+            return { success: false, error: error.message };
         }
-        if (currentProviderMode === 'local') {
-            try {
-                const pcmBuffer = Buffer.from(data, 'base64');
-                getLocalAi().processLocalAudio(pcmBuffer);
-                return { success: true };
-            } catch (error) {
-                console.error('Error sending local audio:', error);
-                return { success: false, error: error.message };
-            }
-        }
-        return processHostedAudioChunk('system', data, mimeType);
     });
 
     // Handle microphone audio on a separate channel
     ipcMain.handle('send-mic-audio-content', async (event, { data, mimeType }) => {
-        if (!speechCaptureEnabled) return { success: true, ignored: true };
-        if (currentProviderMode === 'cloud') {
-            try {
-                const pcmBuffer = Buffer.from(data, 'base64');
-                sendCloudAudio(pcmBuffer);
-                return { success: true };
-            } catch (error) {
-                console.error('Error sending cloud mic audio:', error);
-                return { success: false, error: error.message };
-            }
+        try {
+            return processIncomingAudioContent('microphone', data, mimeType);
+        } catch (error) {
+            console.error('Error processing microphone audio:', error);
+            return { success: false, error: error.message };
         }
-        if (currentProviderMode === 'local') {
-            try {
-                const pcmBuffer = Buffer.from(data, 'base64');
-                getLocalAi().processLocalAudio(pcmBuffer);
-                return { success: true };
-            } catch (error) {
-                console.error('Error sending local mic audio:', error);
-                return { success: false, error: error.message };
-            }
-        }
-        return processHostedAudioChunk('microphone', data, mimeType);
     });
 
     ipcMain.handle('list-local-vision-models', async () => {
@@ -1635,17 +1733,16 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
         return { success: true };
     });
 
-    ipcMain.handle('reset-speech-capture', () => {
-        speechCaptureEnabled = true;
-        if (currentProviderMode === 'local') getLocalAi().resetLocalAudio();
-        else hostedAudioSegmenter?.reset();
-        return { success: true };
+    ipcMain.handle('start-speech-capture', (event, source) => {
+        return startManualSpeechCapture(source);
     });
 
-    ipcMain.handle('flush-speech-capture', () => {
-        speechCaptureEnabled = false;
-        const queued = currentProviderMode === 'local' ? getLocalAi().flushLocalAudio() : Boolean(hostedAudioSegmenter?.flush());
-        return { success: true, queued };
+    ipcMain.handle('finish-speech-capture', async (event, source) => {
+        return finalizeManualSpeechCapture(source);
+    });
+
+    ipcMain.handle('retry-speech-capture', async (event, source) => {
+        return finalizeManualSpeechCapture(source, true);
     });
 
     ipcMain.handle('close-session', async event => {
@@ -1655,11 +1752,13 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
             stopMacOSAudioCapture();
             hostedAudioSegmenter?.reset();
             hostedAudioSegmenter = null;
+            clearManualAudioSession();
             currentGroqSession = null;
             pendingUtteranceIds.clear();
             hostedAudioQueue = Promise.resolve();
             groqTextQueue = Promise.resolve();
             speechCaptureEnabled = true;
+            speechCaptureMode = 'toggle';
 
             if (currentProviderMode === 'cloud') {
                 closeCloud();

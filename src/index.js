@@ -2,7 +2,7 @@ if (require('electron-squirrel-startup')) {
     process.exit(0);
 }
 
-const { app, BrowserWindow, shell, ipcMain } = require('electron');
+const { app, BrowserWindow, shell, ipcMain, globalShortcut } = require('electron');
 const { createWindow, updateGlobalShortcuts } = require('./utils/window');
 const { setupGeminiIpcHandlers, stopMacOSAudioCapture, sendToRenderer } = require('./utils/gemini');
 const storage = require('./storage');
@@ -42,6 +42,7 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', () => {
     stopMacOSAudioCapture();
+    globalShortcut.unregisterAll();
 });
 
 app.on('activate', () => {
@@ -363,9 +364,12 @@ function setupGeneralIpcHandlers() {
 
     ipcMain.on('update-keybinds', (event, newKeybinds) => {
         if (mainWindow) {
-            // Also save to storage
-            storage.setKeybinds(newKeybinds);
-            updateGlobalShortcuts(newKeybinds, mainWindow, sendToRenderer, geminiSessionRef);
+            try {
+                updateGlobalShortcuts(newKeybinds, mainWindow, sendToRenderer, geminiSessionRef);
+            } catch (error) {
+                console.error('Error updating keybinds:', error);
+                sendToRenderer('shortcut-registration-status', { success: false, error: error.message });
+            }
         }
     });
 

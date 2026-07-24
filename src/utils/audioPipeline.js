@@ -125,6 +125,101 @@ function createSpeechSegmenter(options = {}) {
     };
 }
 
+function createManualAudioChunker(options = {}) {
+    const config = {
+        inputRate: 24000,
+        outputRate: 16000,
+        energyThreshold: 0.012,
+        minSpeechMs: 400,
+        targetChunkMs: 20000,
+        maxChunkMs: 28000,
+        boundarySilenceMs: 200,
+        overlapMs: 600,
+        ...options,
+    };
+    const resampleState = { remainder: Buffer.alloc(0) };
+    let entries = [];
+    let durationMs = 0;
+    let speechMs = 0;
+    let trailingSilenceMs = 0;
+    let newSpeechMs = 0;
+
+    const resetBuffers = retained => {
+        entries = retained || [];
+        durationMs = entries.reduce((total, entry) => total + entry.durationMs, 0);
+        speechMs = entries.reduce((total, entry) => total + (entry.voice ? entry.durationMs : 0), 0);
+        newSpeechMs = 0;
+        trailingSilenceMs = 0;
+        for (let index = entries.length - 1; index >= 0 && !entries[index].voice; index--) trailingSilenceMs += entries[index].durationMs;
+    };
+
+    const emit = hardSplit => {
+        if (!entries.length) return null;
+        const audio = speechMs >= config.minSpeechMs && newSpeechMs > 0 ? Buffer.concat(entries.map(entry => entry.chunk)) : null;
+        let retained = [];
+        if (hardSplit && audio) {
+            let retainedMs = 0;
+            for (let index = entries.length - 1; index >= 0 && retainedMs < config.overlapMs; index--) {
+                retained.unshift(entries[index]);
+                retainedMs += entries[index].durationMs;
+            }
+        }
+        resetBuffers(retained);
+        if (audio && typeof config.onChunk === 'function') config.onChunk(audio, { hardSplit });
+        return audio;
+    };
+
+    return {
+        push(inputBuffer) {
+            const chunk = resamplePcm16(inputBuffer, config.inputRate, config.outputRate, resampleState);
+            if (!chunk.length) return null;
+            const chunkDurationMs = (chunk.length / 2 / config.outputRate) * 1000;
+            const voice = calculateRms(chunk) >= config.energyThreshold;
+            entries.push({ chunk: Buffer.from(chunk), durationMs: chunkDurationMs, voice });
+            durationMs += chunkDurationMs;
+            speechMs += voice ? chunkDurationMs : 0;
+            newSpeechMs += voice ? chunkDurationMs : 0;
+            trailingSilenceMs = voice ? 0 : trailingSilenceMs + chunkDurationMs;
+
+            if (durationMs >= config.targetChunkMs && trailingSilenceMs >= config.boundarySilenceMs) return emit(false);
+            if (durationMs >= config.maxChunkMs) return emit(true);
+            return null;
+        },
+        flush() {
+            return emit(false);
+        },
+        reset() {
+            resetBuffers([]);
+            resampleState.remainder = Buffer.alloc(0);
+        },
+        getDurationMs: () => durationMs,
+    };
+}
+
+function joinTranscriptParts(parts) {
+    const normalized = parts.map(part => String(part || '').trim()).filter(Boolean);
+    if (!normalized.length) return '';
+
+    let merged = normalized[0];
+    for (const part of normalized.slice(1)) {
+        const previousWords = merged.split(/\s+/);
+        const nextWords = part.split(/\s+/);
+        const comparable = word => word.toLocaleLowerCase().replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '');
+        let overlap = 0;
+        const maxOverlap = Math.min(12, previousWords.length, nextWords.length);
+        for (let size = maxOverlap; size >= 2; size--) {
+            const previous = previousWords.slice(-size).map(comparable);
+            const next = nextWords.slice(0, size).map(comparable);
+            if (previous.every((word, index) => word && word === next[index])) {
+                overlap = size;
+                break;
+            }
+        }
+        merged = `${merged} ${nextWords.slice(overlap).join(' ')}`.trim();
+    }
+    return merged.replace(/\s+/g, ' ');
+}
+
 function encodePcm16Wav(pcmBuffer, sampleRate = 16000, channels = 1) {
     const header = Buffer.alloc(44);
     const byteRate = sampleRate * channels * 2;
@@ -144,4 +239,4 @@ function encodePcm16Wav(pcmBuffer, sampleRate = 16000, channels = 1) {
     return Buffer.concat([header, pcmBuffer]);
 }
 
-module.exports = { resamplePcm16, calculateRms, createSpeechSegmenter, encodePcm16Wav };
+module.exports = { resamplePcm16, calculateRms, createSpeechSegmenter, createManualAudioChunker, joinTranscriptParts, encodePcm16Wav };

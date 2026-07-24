@@ -403,6 +403,7 @@ export class CheatingDaddyApp extends LitElement {
         _awaitingNewResponse: { state: true },
         shouldAnimateResponse: { type: Boolean },
         _storageLoaded: { state: true },
+        _storageError: { state: true },
         _updateAvailable: { state: true },
         _whisperDownloading: { state: true },
         _groqSessionPlan: { state: true },
@@ -431,6 +432,7 @@ export class CheatingDaddyApp extends LitElement {
         this._currentResponseIsComplete = true;
         this.shouldAnimateResponse = false;
         this._storageLoaded = false;
+        this._storageError = '';
         this._timerInterval = null;
         this._updateAvailable = false;
         this._whisperDownloading = false;
@@ -466,6 +468,8 @@ export class CheatingDaddyApp extends LitElement {
     }
 
     async _loadFromStorage() {
+        this._storageLoaded = false;
+        this._storageError = '';
         try {
             const [config, prefs] = await Promise.all([cheatingDaddy.storage.getConfig(), cheatingDaddy.storage.getPreferences()]);
 
@@ -480,6 +484,7 @@ export class CheatingDaddyApp extends LitElement {
             this.requestUpdate();
         } catch (error) {
             console.error('Error loading from storage:', error);
+            this._storageError = error.message || 'Could not load settings';
             this._storageLoaded = true;
             this.requestUpdate();
         }
@@ -610,7 +615,7 @@ export class CheatingDaddyApp extends LitElement {
 
     async handleClose() {
         if (this.currentView === 'assistant') {
-            cheatingDaddy.stopCapture();
+            await cheatingDaddy.stopCapture();
             if (window.require) {
                 const { ipcRenderer } = window.require('electron');
                 await ipcRenderer.invoke('close-session');
@@ -647,7 +652,10 @@ export class CheatingDaddyApp extends LitElement {
     // ── Session start ──
 
     async handleStart() {
+        if (!this._storageLoaded) return;
         const prefs = await cheatingDaddy.storage.getPreferences();
+        this.selectedProfile = prefs.selectedProfile || 'interview';
+        this.selectedLanguage = prefs.selectedLanguage || 'en-US';
         const providerMode = prefs.providerMode === 'cloud' ? 'byok' : prefs.providerMode || 'byok';
         let sessionInfo = null;
 
@@ -730,13 +738,13 @@ export class CheatingDaddyApp extends LitElement {
     // ── Settings handlers ──
 
     async handleProfileChange(profile) {
-        this.selectedProfile = profile;
         await cheatingDaddy.storage.updatePreference('selectedProfile', profile);
+        this.selectedProfile = profile;
     }
 
     async handleLanguageChange(language) {
-        this.selectedLanguage = language;
         await cheatingDaddy.storage.updatePreference('selectedLanguage', language);
+        this.selectedLanguage = language;
     }
 
     async handleScreenshotIntervalChange(interval) {
@@ -1073,6 +1081,17 @@ export class CheatingDaddyApp extends LitElement {
     }
 
     render() {
+        if (this._storageError) {
+            return html`
+                <div class="fullscreen">
+                    <div class="status error">Settings could not be loaded: ${this._storageError}</div>
+                    <button class="control" @click=${() => this._loadFromStorage()}>Retry</button>
+                </div>
+            `;
+        }
+        if (!this._storageLoaded) {
+            return html`<div class="fullscreen"><div class="status">Loading settings...</div></div>`;
+        }
         // Onboarding is fullscreen, no sidebar
         if (this.currentView === 'onboarding') {
             return html` <div class="fullscreen">${this.renderCurrentView()}</div> `;

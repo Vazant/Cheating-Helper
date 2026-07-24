@@ -8,8 +8,14 @@ process.env.USERPROFILE = tempHome;
 
 const configDir = path.join(tempHome, 'AppData', 'Roaming', 'cheating-daddy-config');
 fs.mkdirSync(configDir, { recursive: true });
-fs.writeFileSync(path.join(configDir, 'config.json'), JSON.stringify({ configVersion: 1 }), 'utf8');
+fs.writeFileSync(path.join(configDir, 'config.json'), JSON.stringify({ configVersion: 0, preserved: true }), 'utf8');
 fs.writeFileSync(path.join(configDir, 'credentials.json'), JSON.stringify({ groqApiKey: 'legacy-key', unrelated: 'preserved' }), 'utf8');
+fs.writeFileSync(
+    path.join(configDir, 'preferences.json'),
+    JSON.stringify({ selectedLanguage: 'ru-RU', selectedProfile: 'profile_senior_java_interview', speechCaptureMode: 'always' }),
+    'utf8'
+);
+fs.writeFileSync(path.join(configDir, 'keybinds.json'), JSON.stringify({ toggleSpeechCapture: 'F7' }), 'utf8');
 fs.writeFileSync(
     path.join(configDir, 'profiles.json'),
     JSON.stringify({
@@ -50,6 +56,8 @@ try {
     assert.strictEqual(storage.normalizeAudioMode('both'), 'speaker_only');
     assert.strictEqual(storage.normalizeAudioMode('mic_only'), 'mic_only');
     storage.initializeStorage();
+    assert.strictEqual(storage.getConfig().preserved, true);
+    assert.strictEqual(storage.getConfig().configVersion, 1);
     assert.ok(storage.getAiProfile('profile_epam_hr_call').prompt.answerRules.includes('Why are you changing jobs?'));
     assert.deepStrictEqual(storage.getGroqApiKeys(), ['legacy-key']);
     assert.strictEqual(storage.getCredentials().unrelated, 'preserved');
@@ -63,7 +71,14 @@ try {
     assert.strictEqual(storage.activateGroqApiKey('missing'), false);
 
     const defaults = storage.getPreferences();
-    assert.strictEqual(defaults.speechCaptureMode, 'always');
+    assert.strictEqual(defaults.speechCaptureMode, 'toggle');
+    assert.strictEqual(defaults.selectedLanguage, 'ru-RU');
+    assert.strictEqual(defaults.selectedProfile, 'profile_senior_java_interview');
+    assert.strictEqual(storage.getKeybinds().toggleSystemAudio, 'F7');
+    assert.strictEqual(storage.getKeybinds().toggleMicrophone, 'F9');
+    assert.strictEqual(storage.getKeybinds().toggleSpeechCapture, undefined);
+    assert.throws(() => storage.setKeybinds({ toggleSystemAudio: 'F8', toggleMicrophone: 'F8' }), /unique/);
+    assert.throws(() => storage.updatePreference('unknownPreference', true), /Unknown preference/);
     assert.strictEqual(defaults.visionProvider, 'groq');
     assert.strictEqual(defaults.groqVisionModel, 'qwen/qwen3.6-27b');
     assert.strictEqual(defaults.ollamaVisionModel, 'qwen3-vl:4b');
@@ -80,7 +95,15 @@ try {
     storage.updatePreference('speechCaptureMode', 'toggle');
     assert.strictEqual(storage.getPreferences().speechCaptureMode, 'toggle');
     storage.updatePreference('speechCaptureMode', 'invalid');
-    assert.strictEqual(storage.getPreferences().speechCaptureMode, 'always');
+    assert.strictEqual(storage.getPreferences().speechCaptureMode, 'toggle');
+    storage.updatePreference('fontSize', 'medium');
+    assert.strictEqual(storage.getPreferences().fontSize, 20);
+    storage.updatePreference('backgroundTransparency', 5);
+    assert.strictEqual(storage.getPreferences().backgroundTransparency, 1);
+    storage.updatePreference('selectedLanguage', 'pl-PL');
+    fs.writeFileSync(path.join(configDir, 'preferences.json'), '{broken', 'utf8');
+    assert.strictEqual(storage.getPreferences().selectedLanguage, 'pl-PL');
+    storage.updatePreference('selectedLanguage', 'ru-RU');
 
     const copy = storage.createAiProfile('interview');
     const updated = storage.updateAiProfile(copy.id, { prompt: { userContext: 'Profile A facts' } });

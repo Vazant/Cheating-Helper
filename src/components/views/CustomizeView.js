@@ -8,6 +8,120 @@ export class CustomizeView extends LitElement {
     static styles = [
         unifiedPageStyles,
         css`
+            .unified-wrap {
+                max-width: 880px;
+                gap: 18px;
+                padding-bottom: var(--space-lg);
+            }
+
+            .page-header {
+                display: flex;
+                flex-direction: column;
+                gap: 6px;
+                padding: 4px 2px 8px;
+            }
+
+            .page-title {
+                margin: 0;
+            }
+
+            .surface {
+                padding: 22px;
+            }
+
+            .section-header {
+                margin-bottom: 18px;
+            }
+
+            .surface-title {
+                margin: 0 0 6px;
+            }
+
+            .surface-subtitle {
+                margin: 0;
+                max-width: 680px;
+                font-size: var(--font-size-sm);
+                line-height: 1.5;
+            }
+
+            .form-grid {
+                gap: 18px;
+            }
+
+            .form-group {
+                min-width: 0;
+                align-items: stretch;
+                flex-direction: column;
+                justify-content: flex-start;
+                gap: 7px;
+            }
+
+            .form-label {
+                color: var(--text-primary);
+                font-weight: var(--font-weight-medium);
+                line-height: 1.35;
+                white-space: normal;
+            }
+
+            .control {
+                width: 100%;
+                min-width: 0;
+                min-height: 38px;
+            }
+
+            .field-help,
+            .form-hint {
+                max-width: 680px;
+                color: var(--text-muted);
+                font-size: var(--font-size-xs);
+                line-height: 1.5;
+                overflow-wrap: anywhere;
+            }
+
+            .field-actions {
+                display: flex;
+                align-items: center;
+                flex-wrap: wrap;
+                gap: var(--space-sm);
+                margin-top: 3px;
+            }
+
+            .secondary-button {
+                min-height: 34px;
+                padding: 7px 11px;
+                border: 1px solid var(--border);
+                border-radius: var(--radius-sm);
+                background: var(--bg-elevated);
+                color: var(--text-secondary);
+                font-size: var(--font-size-xs);
+                cursor: pointer;
+                transition:
+                    border-color var(--transition),
+                    color var(--transition),
+                    background var(--transition);
+            }
+
+            .secondary-button:hover {
+                border-color: var(--border-strong);
+                color: var(--text-primary);
+            }
+
+            .check-row {
+                display: flex;
+                align-items: flex-start;
+                gap: 8px;
+                color: var(--text-secondary);
+                font-size: var(--font-size-sm);
+                line-height: 1.45;
+            }
+
+            .check-row input {
+                flex: 0 0 auto;
+                margin: 2px 0 0;
+                accent-color: var(--accent);
+                cursor: pointer;
+            }
+
             .danger-surface {
                 border-color: var(--danger);
             }
@@ -94,8 +208,10 @@ export class CustomizeView extends LitElement {
             .slider-input {
                 -webkit-appearance: none;
                 appearance: none;
-                width: 100%;
+                width: calc(100% - 2px);
+                min-width: 0;
                 height: 4px;
+                margin: 0 1px;
                 border-radius: 2px;
                 background: var(--border);
                 outline: none;
@@ -121,10 +237,11 @@ export class CustomizeView extends LitElement {
             }
 
             .keybind-row {
-                display: flex;
+                display: grid;
+                grid-template-columns: minmax(0, 1fr) 160px;
                 align-items: center;
-                justify-content: space-between;
-                padding: var(--space-sm) 0;
+                gap: var(--space-md);
+                padding: 12px 0;
                 border-bottom: 1px solid var(--border);
             }
 
@@ -135,10 +252,12 @@ export class CustomizeView extends LitElement {
             .keybind-name {
                 color: var(--text-secondary);
                 font-size: var(--font-size-sm);
+                line-height: 1.4;
+                overflow-wrap: anywhere;
             }
 
             .keybind-input {
-                width: 140px;
+                width: 160px;
                 text-align: center;
                 font-family: var(--font-mono);
                 font-size: var(--font-size-xs);
@@ -181,6 +300,21 @@ export class CustomizeView extends LitElement {
                 border-color: var(--danger);
                 color: var(--danger);
             }
+
+            @media (max-width: 720px) {
+                .surface {
+                    padding: var(--space-md);
+                }
+
+                .keybind-row {
+                    grid-template-columns: 1fr;
+                    gap: 8px;
+                }
+
+                .keybind-input {
+                    width: 100%;
+                }
+            }
         `,
     ];
 
@@ -210,7 +344,10 @@ export class CustomizeView extends LitElement {
         visionIncludeConversation: { type: Boolean },
         localVisionModels: { type: Array },
         localVisionStatus: { type: String },
+        audioMode: { type: String },
         speechCaptureMode: { type: String },
+        microphoneDeviceId: { type: String },
+        microphoneDevices: { type: Array },
     };
 
     constructor() {
@@ -232,7 +369,9 @@ export class CustomizeView extends LitElement {
         this.backgroundTransparency = 0.8;
         this.fontSize = 20;
         this.audioMode = 'speaker_only';
-        this.speechCaptureMode = 'always';
+        this.speechCaptureMode = 'toggle';
+        this.microphoneDeviceId = '';
+        this.microphoneDevices = [];
         this.customPrompt = '';
         this.theme = 'dark';
         this.providerMode = 'byok';
@@ -257,7 +396,8 @@ export class CustomizeView extends LitElement {
             this.backgroundTransparency = prefs.backgroundTransparency ?? 0.8;
             this.fontSize = prefs.fontSize ?? 20;
             this.audioMode = prefs.audioMode === 'mic_only' ? 'mic_only' : 'speaker_only';
-            this.speechCaptureMode = prefs.speechCaptureMode === 'toggle' ? 'toggle' : 'always';
+            this.speechCaptureMode = prefs.speechCaptureMode === 'always' ? 'always' : 'toggle';
+            this.microphoneDeviceId = prefs.microphoneDeviceId || '';
             this.customPrompt = prefs.customPrompt ?? '';
             this.theme = prefs.theme ?? 'dark';
             this.providerMode = prefs.providerMode === 'local' ? 'local' : 'byok';
@@ -269,7 +409,12 @@ export class CustomizeView extends LitElement {
             if (this.visionProvider === 'ollama') await this.refreshLocalVisionModels();
             if (keybinds) {
                 this.keybinds = { ...this.getDefaultKeybinds(), ...keybinds };
+                if (keybinds.toggleSpeechCapture && !keybinds.toggleSystemAudio) {
+                    this.keybinds.toggleSystemAudio = keybinds.toggleSpeechCapture;
+                }
+                delete this.keybinds.toggleSpeechCapture;
             }
+            await this.refreshMicrophoneDevices();
             this.updateBackgroundAppearance();
             this.updateFontSize();
             this.requestUpdate();
@@ -338,7 +483,8 @@ export class CustomizeView extends LitElement {
             nextResponse: isMac ? 'Cmd+]' : 'Ctrl+]',
             scrollUp: isMac ? 'Cmd+Shift+Up' : 'Ctrl+Shift+Up',
             scrollDown: isMac ? 'Cmd+Shift+Down' : 'Ctrl+Shift+Down',
-            toggleSpeechCapture: 'F8',
+            toggleSystemAudio: 'F8',
+            toggleMicrophone: 'F9',
         };
     }
 
@@ -355,7 +501,8 @@ export class CustomizeView extends LitElement {
             { key: 'nextResponse', name: 'Next Response', description: 'Move to next AI response' },
             { key: 'scrollUp', name: 'Scroll Response Up', description: 'Scroll response content upward' },
             { key: 'scrollDown', name: 'Scroll Response Down', description: 'Scroll response content downward' },
-            { key: 'toggleSpeechCapture', name: 'Start / Stop Speech Recording', description: 'Toggle speech recording during a session' },
+            { key: 'toggleSystemAudio', name: 'System Audio Recording', description: 'Start or stop System Audio recording' },
+            { key: 'toggleMicrophone', name: 'Microphone Recording', description: 'Start or stop microphone recording' },
         ];
     }
 
@@ -367,14 +514,24 @@ export class CustomizeView extends LitElement {
         }
     }
 
-    handleProfileSelect(e) {
-        this.selectedProfile = e.target.value;
-        this.onProfileChange(this.selectedProfile);
+    async handleProfileSelect(e) {
+        const next = e.target.value;
+        try {
+            await this.onProfileChange(next);
+            this.selectedProfile = next;
+        } catch (error) {
+            this.showSettingsError(error);
+        }
     }
 
-    handleLanguageSelect(e) {
-        this.selectedLanguage = e.target.value;
-        this.onLanguageChange(this.selectedLanguage);
+    async handleLanguageSelect(e) {
+        const next = e.target.value;
+        try {
+            await this.onLanguageChange(next);
+            this.selectedLanguage = next;
+        } catch (error) {
+            this.showSettingsError(error);
+        }
     }
 
     handleImageQualitySelect(e) {
@@ -393,16 +550,46 @@ export class CustomizeView extends LitElement {
     }
 
     async handleAudioModeSelect(e) {
-        this.audioMode = e.target.value;
-        await cheatingDaddy.storage.updatePreference('audioMode', this.audioMode);
-        this.requestUpdate();
+        await this.savePreference('audioMode', e.target.value);
     }
 
     async handleSpeechCaptureModeSelect(e) {
-        this.speechCaptureMode = e.target.value;
-        await cheatingDaddy.storage.updatePreference('speechCaptureMode', this.speechCaptureMode);
+        await this.savePreference('speechCaptureMode', e.target.value);
         await cheatingDaddy.refreshPreferencesCache();
+    }
+
+    async handleMicrophoneDeviceSelect(e) {
+        await this.savePreference('microphoneDeviceId', e.target.value);
+    }
+
+    async savePreference(property, value) {
+        const previous = this[property];
+        try {
+            await cheatingDaddy.storage.updatePreference(property, value);
+            this[property] = value;
+            this.clearStatusMessage = '';
+        } catch (error) {
+            this[property] = previous;
+            this.showSettingsError(error);
+        }
         this.requestUpdate();
+    }
+
+    showSettingsError(error) {
+        this.clearStatusMessage = error?.message || 'Could not save the setting';
+        this.clearStatusType = 'error';
+        this.requestUpdate();
+    }
+
+    async refreshMicrophoneDevices(requestPermission = false) {
+        try {
+            this.microphoneDevices = await cheatingDaddy.getMicrophoneDevices(requestPermission);
+            this.clearStatusMessage = '';
+        } catch (error) {
+            console.warn('Could not list microphones:', error.message);
+            this.microphoneDevices = [];
+            if (requestPermission) this.showSettingsError(error);
+        }
     }
 
     async handleHostedTextModelSelect(e) {
@@ -507,7 +694,7 @@ export class CustomizeView extends LitElement {
         document.documentElement.style.setProperty('--response-font-size', `${this.fontSize}px`);
     }
 
-    handleKeybindChange(action, value) {
+    async handleKeybindChange(action, value) {
         const duplicate = Object.entries(this.keybinds).find(([key, keybind]) => key !== action && keybind === value);
         if (duplicate) {
             this.clearStatusMessage = `${value} is already assigned. Choose another shortcut.`;
@@ -516,10 +703,17 @@ export class CustomizeView extends LitElement {
             return false;
         }
         this.clearStatusMessage = '';
+        const previous = this.keybinds;
         this.keybinds = { ...this.keybinds, [action]: value };
-        this.saveKeybinds();
-        this.requestUpdate();
-        return true;
+        try {
+            await this.saveKeybinds();
+            this.requestUpdate();
+            return true;
+        } catch (error) {
+            this.keybinds = previous;
+            this.showSettingsError(error);
+            return false;
+        }
     }
 
     handleKeybindFocus(e) {
@@ -527,7 +721,7 @@ export class CustomizeView extends LitElement {
         e.target.select();
     }
 
-    handleKeybindInput(e) {
+    async handleKeybindInput(e) {
         e.preventDefault();
         const modifiers = [];
         if (e.ctrlKey) modifiers.push('Ctrl');
@@ -567,7 +761,7 @@ export class CustomizeView extends LitElement {
 
         const action = e.target.dataset.action;
         const keybind = [...modifiers, mainKey].join('+');
-        if (this.handleKeybindChange(action, keybind)) e.target.value = keybind;
+        if (await this.handleKeybindChange(action, keybind)) e.target.value = keybind;
         e.target.blur();
     }
 
@@ -596,7 +790,8 @@ export class CustomizeView extends LitElement {
                 selectedScreenshotInterval: '5',
                 selectedImageQuality: 'medium',
                 audioMode: 'speaker_only',
-                speechCaptureMode: 'always',
+                speechCaptureMode: 'toggle',
+                microphoneDeviceId: '',
                 fontSize: 20,
                 backgroundTransparency: 0.8,
                 googleSearchEnabled: false,
@@ -626,6 +821,7 @@ export class CustomizeView extends LitElement {
             this.selectedImageQuality = defaults.selectedImageQuality;
             this.audioMode = defaults.audioMode;
             this.speechCaptureMode = defaults.speechCaptureMode;
+            this.microphoneDeviceId = defaults.microphoneDeviceId;
             this.fontSize = defaults.fontSize;
             this.backgroundTransparency = defaults.backgroundTransparency;
             this.googleSearchEnabled = defaults.googleSearchEnabled;
@@ -693,7 +889,10 @@ export class CustomizeView extends LitElement {
     renderAudioSection() {
         return html`
             <section class="surface">
-                <div class="surface-title">Audio Input</div>
+                <div class="section-header">
+                    <div class="surface-title">Audio Input</div>
+                    <div class="surface-subtitle">Choose how speech recording starts and which input is used.</div>
+                </div>
                 <div class="form-grid">
                     <div class="form-group">
                         <label class="form-label">Audio Mode</label>
@@ -701,26 +900,33 @@ export class CustomizeView extends LitElement {
                             <option value="speaker_only">System Audio</option>
                             <option value="mic_only">Microphone</option>
                         </select>
-                    </div>
-                    <div class="field-help">Choose one source. Both streams are intentionally disabled to prevent mixed transcripts.</div>
-                    <div class="form-group">
-                        <label class="form-label">Speech Recording</label>
-                        <select class="control" .value=${this.speechCaptureMode} @change=${this.handleSpeechCaptureModeSelect}>
-                            <option value="always">Always listen</option>
-                            <option value="toggle">Start / stop with shortcut</option>
-                        </select>
-                        <div class="form-hint">
-                            In shortcut mode, press the configured key once to record and again to transcribe and send. Audio outside that window is
-                            ignored.
+                        <div class="field-help">
+                            Used by Always listen. In Toggle-to-talk, ${this.keybinds.toggleSystemAudio} always records System Audio and
+                            ${this.keybinds.toggleMicrophone} always records Microphone.
                         </div>
                     </div>
                     <div class="form-group">
-                        <label class="form-label">Image Quality</label>
-                        <select class="control" .value=${this.selectedImageQuality} @change=${this.handleImageQualitySelect}>
-                            <option value="high">High Quality</option>
-                            <option value="medium">Medium Quality</option>
-                            <option value="low">Low Quality</option>
+                        <label class="form-label">Speech Recording</label>
+                        <select class="control" .value=${this.speechCaptureMode} @change=${this.handleSpeechCaptureModeSelect}>
+                            <option value="toggle">Start / stop with shortcuts (recommended)</option>
+                            <option value="always">Always listen</option>
                         </select>
+                        <div class="field-help">
+                            Press ${this.keybinds.toggleSystemAudio} once to start System Audio and again to send. Use
+                            ${this.keybinds.toggleMicrophone} the same way for Microphone. Long recordings are transcribed in parts but sent as one
+                            question.
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Microphone</label>
+                        <select class="control" .value=${this.microphoneDeviceId} @change=${this.handleMicrophoneDeviceSelect}>
+                            <option value="">Windows default microphone</option>
+                            ${this.microphoneDevices.map(device => html`<option value=${device.deviceId}>${device.label}</option>`)}
+                        </select>
+                        <div class="field-help">Used by ${this.keybinds.toggleMicrophone} and by Always listen when Audio Mode is Microphone.</div>
+                        <div class="field-actions">
+                            <button class="secondary-button" @click=${() => this.refreshMicrophoneDevices(true)}>Refresh microphones</button>
+                        </div>
                     </div>
                 </div>
             </section>
@@ -732,8 +938,10 @@ export class CustomizeView extends LitElement {
 
         return html`
             <section class="surface">
-                <div class="surface-title">AI Models</div>
-                <div class="surface-subtitle">Hosted</div>
+                <div class="section-header">
+                    <div class="surface-title">AI Models</div>
+                    <div class="surface-subtitle">Select the hosted model used to generate answers from typed questions and transcripts.</div>
+                </div>
                 <div class="form-grid">
                     <div class="form-group">
                         <label class="form-label">Text Response Model</label>
@@ -752,7 +960,10 @@ export class CustomizeView extends LitElement {
     renderVisionSection() {
         return html`
             <section class="surface">
-                <div class="surface-title">Screenshot Analysis</div>
+                <div class="section-header">
+                    <div class="surface-title">Screenshot Analysis</div>
+                    <div class="surface-subtitle">Configure where screenshots are processed and what context is sent with them.</div>
+                </div>
                 <div class="form-grid">
                     <div class="form-group">
                         <label class="form-label">Vision Provider</label>
@@ -785,8 +996,10 @@ export class CustomizeView extends LitElement {
                                   >
                                       ${this.localVisionModels.map(model => html`<option value=${model}>${model}</option>`)}
                                   </select>
-                                  <button class="secondary-button" @click=${this.refreshLocalVisionModels}>Refresh Ollama models</button>
-                                  <div class="form-hint">${this.localVisionStatus}</div>
+                                  <div class="field-help">${this.localVisionStatus}</div>
+                                  <div class="field-actions">
+                                      <button class="secondary-button" @click=${this.refreshLocalVisionModels}>Refresh Ollama models</button>
+                                  </div>
                               </div>`
                             : ''
                     }
@@ -800,14 +1013,25 @@ export class CustomizeView extends LitElement {
                                       .value=${this.screenAnalysisPrompt}
                                       @change=${this.handleScreenAnalysisPrompt}
                                   ></textarea>
-                                  <button class="secondary-button" @click=${this.resetScreenAnalysisPrompt}>Reset instruction</button>
-                                  <label class="form-hint">
+                                  <label class="check-row">
                                       <input type="checkbox" .checked=${this.visionIncludeConversation} @change=${this.handleVisionContextChange} />
                                       Include the last two conversation turns
                                   </label>
+                                  <div class="field-actions">
+                                      <button class="secondary-button" @click=${this.resetScreenAnalysisPrompt}>Reset instruction</button>
+                                  </div>
                               </div>`
                             : ''
                     }
+                    <div class="form-group">
+                        <label class="form-label">Screenshot Quality</label>
+                        <select class="control" .value=${this.selectedImageQuality} @change=${this.handleImageQualitySelect}>
+                            <option value="high">High Quality</option>
+                            <option value="medium">Medium Quality</option>
+                            <option value="low">Low Quality</option>
+                        </select>
+                        <div class="field-help">Higher quality preserves more detail but increases processing time and request size.</div>
+                    </div>
                 </div>
             </section>
         `;
@@ -816,7 +1040,10 @@ export class CustomizeView extends LitElement {
     renderLanguageSection() {
         return html`
             <section class="surface">
-                <div class="surface-title">Language</div>
+                <div class="section-header">
+                    <div class="surface-title">Language</div>
+                    <div class="surface-subtitle">The assistant uses this language for speech recognition and generated answers.</div>
+                </div>
                 <div class="form-grid">
                     <div class="form-group">
                         <label class="form-label">Speech Language</label>
@@ -832,7 +1059,10 @@ export class CustomizeView extends LitElement {
     renderAppearanceSection() {
         return html`
             <section class="surface">
-                <div class="surface-title">Appearance</div>
+                <div class="section-header">
+                    <div class="surface-title">Appearance</div>
+                    <div class="surface-subtitle">Adjust how the application and generated responses are displayed.</div>
+                </div>
                 <div class="form-grid">
                     <div class="form-group">
                         <label class="form-label">Theme</label>
@@ -878,7 +1108,10 @@ export class CustomizeView extends LitElement {
     renderKeyboardSection() {
         return html`
             <section class="surface">
-                <div class="surface-title">Keyboard Shortcuts</div>
+                <div class="section-header">
+                    <div class="surface-title">Keyboard Shortcuts</div>
+                    <div class="surface-subtitle">Select a shortcut field, then press the key combination you want to assign.</div>
+                </div>
                 ${this.getKeybindActions().map(
                     action => html`
                         <div class="keybind-row">
@@ -895,8 +1128,8 @@ export class CustomizeView extends LitElement {
                         </div>
                     `
                 )}
-                <div style="margin-top: var(--space-sm);">
-                    <button class="control" style="width:auto;padding:8px 10px;" @click=${this.resetKeybinds}>Reset to defaults</button>
+                <div class="field-actions">
+                    <button class="secondary-button" @click=${this.resetKeybinds}>Reset to defaults</button>
                 </div>
                 ${this.clearStatusMessage && this.clearStatusType === 'error' ? html`<div class="status error">${this.clearStatusMessage}</div>` : ''}
             </section>
@@ -906,8 +1139,11 @@ export class CustomizeView extends LitElement {
     renderPrivacySection() {
         return html`
             <section class="surface danger-surface">
-                <div class="surface-title danger">Privacy and Data</div>
-                <div style="display:flex;gap:var(--space-sm);flex-wrap:wrap;">
+                <div class="section-header">
+                    <div class="surface-title danger">Privacy and Data</div>
+                    <div class="surface-subtitle">Reset preferences or permanently remove locally stored application data.</div>
+                </div>
+                <div class="field-actions">
                     <button class="danger-button" @click=${this.restoreAllSettings} ?disabled=${this.isRestoring}>
                         ${this.isRestoring ? 'Restoring...' : 'Restore all settings'}
                     </button>
@@ -928,7 +1164,10 @@ export class CustomizeView extends LitElement {
         return html`
             <div class="unified-page">
                 <div class="unified-wrap">
-                    <div class="page-title">Settings</div>
+                    <header class="page-header">
+                        <div class="page-title">Settings</div>
+                        <div class="page-subtitle">Configure models, audio, language, appearance, and shortcuts.</div>
+                    </header>
                     ${this.renderHostedModelsSection()} ${this.renderVisionSection()} ${this.renderAudioSection()} ${this.renderLanguageSection()}
                     ${this.renderAppearanceSection()} ${this.renderKeyboardSection()} ${this.renderPrivacySection()}
                 </div>
