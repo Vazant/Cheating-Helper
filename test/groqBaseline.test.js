@@ -161,10 +161,9 @@ test('compiled Groq profile baseline remains deterministic', () => {
         profile_senior_java_interview: 3514,
     });
 
-    // Baseline defect for Block 6: an explicit zero currently normalizes back to six.
     assert.equal(
         normalizeProfile({ name: 'Zero context', behavior: { conversationContextCount: 0 }, prompt: {} }).behavior.conversationContextCount,
-        6
+        0
     );
 });
 

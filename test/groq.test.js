@@ -65,6 +65,12 @@ assert.deepStrictEqual(
     planned.messages.map(message => message.content),
     ['system', 'recent question', 'recent answer', 'current question']
 );
+assert.deepStrictEqual(normalizeGroqUsage({ prompt_tokens: 10, completion_tokens: null }), {
+    promptTokens: 10,
+    completionTokens: null,
+    totalTokens: null,
+    cachedTokens: null,
+});
 assert.ok(planned.maxCompletionTokens <= 2048 && planned.maxCompletionTokens >= 1024);
 const noHistory = buildGroqRequestPlan('system', history, { conversationContextEnabled: false, conversationContextCount: 20 });
 assert.deepStrictEqual(

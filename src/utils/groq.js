@@ -94,6 +94,25 @@ function estimateMessagesTokens(messages) {
     return (messages || []).reduce((total, message) => total + estimateTextTokens(message?.content), 32 + (messages || []).length * 12);
 }
 
+function buildGroqProfilePlan(systemPrompt, behavior = {}, model = DEFAULT_GROQ_MODEL, tokenLimit = DEFAULT_TPM_LIMIT) {
+    const contextEnabled = behavior.conversationContextEnabled !== false;
+    const contextPairLimit = contextEnabled ? Math.max(0, Math.min(Number(behavior.conversationContextCount) || 0, 20)) : 0;
+    const provisionalTpmLimit = Math.max(Number(tokenLimit) || DEFAULT_TPM_LIMIT, MIN_COMPLETION_TOKENS);
+    const estimatedPromptTokens = estimateTextTokens(systemPrompt);
+    const usableTokens = Math.floor(provisionalTpmLimit * 0.95) - 128;
+
+    return {
+        model,
+        contextEnabled,
+        contextPairLimit,
+        promptCharacters: String(systemPrompt || '').length,
+        estimatedPromptTokens,
+        provisionalTpmLimit,
+        minimumAnswerTokens: MIN_COMPLETION_TOKENS,
+        maximumAnswerTokensBeforeQuestion: Math.max(0, Math.min(MAX_COMPLETION_TOKENS, usableTokens - estimatedPromptTokens)),
+    };
+}
+
 function buildGroqRequestPlan(systemPrompt, history, behavior = {}, tokenLimit = DEFAULT_TPM_LIMIT) {
     const source = Array.isArray(history) ? history : [];
     const currentTurn = source[source.length - 1];
@@ -127,7 +146,10 @@ function buildGroqRequestPlan(systemPrompt, history, behavior = {}, tokenLimit =
 
 function normalizeGroqUsage(usage) {
     if (!usage || typeof usage !== 'object') return null;
-    const number = value => (Number.isFinite(Number(value)) && Number(value) >= 0 ? Number(value) : null);
+    const number = value => {
+        if (value === null || value === undefined || value === '') return null;
+        return Number.isFinite(Number(value)) && Number(value) >= 0 ? Number(value) : null;
+    };
     const normalized = {
         promptTokens: number(usage.prompt_tokens ?? usage.promptTokens),
         completionTokens: number(usage.completion_tokens ?? usage.completionTokens),
@@ -218,6 +240,7 @@ module.exports = {
     getGroqErrorStatus,
     estimateTextTokens,
     estimateMessagesTokens,
+    buildGroqProfilePlan,
     buildGroqRequestPlan,
     normalizeGroqUsage,
     readGroqSseEvent,

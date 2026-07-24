@@ -229,6 +229,21 @@ function setupStorageIpcHandlers() {
         }
     });
 
+    ipcMain.handle('storage:plan-ai-profile', async (event, profile) => {
+        try {
+            const { compileProfile } = require('./utils/aiProfiles');
+            const { buildGroqProfilePlan } = require('./utils/groq');
+            const preferences = storage.getPreferences();
+            const prompt = compileProfile(profile, { language: preferences.selectedLanguage });
+            return {
+                success: true,
+                data: buildGroqProfilePlan(prompt, profile?.behavior, preferences.hostedTextModel),
+            };
+        } catch (error) {
+            return { success: false, error: error.message };
+        }
+    });
+
     // ============ KEYBINDS ============
     ipcMain.handle('storage:get-keybinds', async () => {
         try {

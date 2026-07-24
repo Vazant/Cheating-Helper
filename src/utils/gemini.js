@@ -31,6 +31,7 @@ const {
     createAbortScope,
     markIncompleteResponse,
     normalizeGroqUsage,
+    buildGroqProfilePlan,
 } = require('./groq');
 
 // Lazy-loaded to avoid circular dependency (localai.js imports from gemini.js)
@@ -133,6 +134,7 @@ function recordGroqMetric(metric) {
     groqRequestMetrics.push(safeMetric);
     if (groqRequestMetrics.length > 100) groqRequestMetrics = groqRequestMetrics.slice(-100);
     console.log('[Groq request metrics]', JSON.stringify(safeMetric));
+    sendToRenderer('groq-metric', safeMetric);
     return safeMetric;
 }
 
@@ -1428,6 +1430,7 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
             profile: { id: selectedProfile.id, name: selectedProfile.name },
             language: { locale: language.locale, name: language.name },
             promptCharacters: currentSystemPrompt.length,
+            groqPlan: buildGroqProfilePlan(currentSystemPrompt, currentGroqSession.behavior, currentGroqSession.model),
         };
     });
 

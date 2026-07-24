@@ -103,6 +103,11 @@ const storage = {
         if (!result.success) throw new Error(result.error);
         return result.data;
     },
+    async planAiProfile(profile) {
+        const result = await ipcRenderer.invoke('storage:plan-ai-profile', profile);
+        if (!result.success) throw new Error(result.error);
+        return result.data;
+    },
 
     // Keybinds
     async getKeybinds() {

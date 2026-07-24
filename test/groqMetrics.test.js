@@ -21,6 +21,12 @@ test('usage normalization keeps only numeric token counters', () => {
     );
     assert.equal(normalizeGroqUsage(null), null);
     assert.equal(normalizeGroqUsage({ prompt_tokens: 'invalid' }), null);
+    assert.deepEqual(normalizeGroqUsage({ prompt_tokens: 12, completion_tokens: null }), {
+        promptTokens: 12,
+        completionTokens: null,
+        totalTokens: null,
+        cachedTokens: null,
+    });
 });
 
 test('session metrics are reset, bounded and exposed without conversation content', () => {

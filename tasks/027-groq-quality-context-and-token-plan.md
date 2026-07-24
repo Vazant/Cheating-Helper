@@ -712,6 +712,17 @@ Rollback:
 
 - UI/settings commit; planner default не меняется.
 
+Evidence:
+
+- В AI Profiles доступны переключатель context и лимит `0–20` завершённых пар; default остаётся `6`.
+- Explicit `0` сохраняется как `0`, а не нормализуется обратно в `6`.
+- До Start показаны model, prompt estimate, provisional TPM, context limit и answer reserve без LLM-вызова.
+- При Start `behavior` копируется в session snapshot; редактирование профиля не меняет активную сессию.
+- Active-session diagnostics различают estimated/actual/not reported и показывают context, output, cache, TTFT/total и TPM.
+- Missing provider usage больше не превращается в нулевые token counters.
+- Context-control checks: 3/3 passed; полная регрессия: 31/31 tests passed.
+- Manual smoke `0/2/6/20`, context off, edit/restart и provider-reported counters: `BLOCKED` до интерактивного запуска и разрешения live Groq calls.
+
 ### Блок 7 — Model-specific parameters и явный fallback
 
 Предлагаемый commit: `fix: make Groq model behavior explicit`

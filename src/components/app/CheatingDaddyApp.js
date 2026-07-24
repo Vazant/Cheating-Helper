@@ -322,6 +322,27 @@ export class CheatingDaddyApp extends LitElement {
             color: var(--text-primary);
         }
 
+        .live-diagnostics {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: var(--space-md);
+            min-height: 25px;
+            padding: 3px var(--space-md);
+            overflow: hidden;
+            border-bottom: 1px solid var(--border);
+            background: var(--bg-elevated);
+            color: var(--text-muted);
+            font-family: var(--font-mono);
+            font-size: var(--font-size-xs);
+            white-space: nowrap;
+        }
+
+        .live-diagnostic-item {
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
         /* Content inner */
         .content-inner {
             flex: 1;
@@ -384,6 +405,8 @@ export class CheatingDaddyApp extends LitElement {
         _storageLoaded: { state: true },
         _updateAvailable: { state: true },
         _whisperDownloading: { state: true },
+        _groqSessionPlan: { state: true },
+        _groqMetric: { state: true },
     };
 
     constructor() {
@@ -411,6 +434,8 @@ export class CheatingDaddyApp extends LitElement {
         this._timerInterval = null;
         this._updateAvailable = false;
         this._whisperDownloading = false;
+        this._groqSessionPlan = null;
+        this._groqMetric = null;
         this._localVersion = '';
 
         this._loadFromStorage();
@@ -468,6 +493,9 @@ export class CheatingDaddyApp extends LitElement {
             ipcRenderer.on('new-response', (_, response) => this.addNewResponse(response));
             ipcRenderer.on('update-response', (_, response) => this.updateCurrentResponse(response));
             ipcRenderer.on('update-status', (_, status) => this.setStatus(status));
+            ipcRenderer.on('groq-metric', (_, metric) => {
+                if (metric?.stage === 'text') this._groqMetric = metric;
+            });
             ipcRenderer.on('click-through-toggled', (_, isEnabled) => {
                 this._isClickThrough = isEnabled;
             });
@@ -486,6 +514,7 @@ export class CheatingDaddyApp extends LitElement {
             ipcRenderer.removeAllListeners('new-response');
             ipcRenderer.removeAllListeners('update-response');
             ipcRenderer.removeAllListeners('update-status');
+            ipcRenderer.removeAllListeners('groq-metric');
             ipcRenderer.removeAllListeners('click-through-toggled');
             ipcRenderer.removeAllListeners('reconnect-failed');
             ipcRenderer.removeAllListeners('whisper-downloading');
@@ -589,6 +618,8 @@ export class CheatingDaddyApp extends LitElement {
             this.sessionActive = false;
             this.activeProfileName = '';
             this.activeLanguageName = '';
+            this._groqSessionPlan = null;
+            this._groqMetric = null;
             this._stopTimer();
             this.currentView = 'main';
         } else {
@@ -672,6 +703,8 @@ export class CheatingDaddyApp extends LitElement {
         }
         this.responses = [];
         this.currentResponseIndex = -1;
+        this._groqSessionPlan = sessionInfo?.groqPlan || null;
+        this._groqMetric = null;
         this.activeProfileName = sessionInfo?.profile?.name || this.selectedProfile;
         this.activeLanguageName = sessionInfo?.language?.name || this.selectedLanguage;
         this.startTime = Date.now();
@@ -968,6 +1001,7 @@ export class CheatingDaddyApp extends LitElement {
             exam: 'Exam',
         };
 
+        const diagnostics = this._formatGroqDiagnostics();
         return html`
             <div class="live-bar">
                 <div class="live-bar-left">
@@ -991,7 +1025,51 @@ export class CheatingDaddyApp extends LitElement {
                     <span class="live-bar-text clickable" @click=${() => this.handleHideToggle()}>[hide]</span>
                 </div>
             </div>
+            ${
+                diagnostics.length
+                    ? html`<div class="live-diagnostics" title=${diagnostics.join(' · ')}>
+                          ${diagnostics.map(item => html`<span class="live-diagnostic-item">${item}</span>`)}
+                      </div>`
+                    : ''
+            }
         `;
+    }
+
+    _formatGroqDiagnostics() {
+        const plan = this._groqSessionPlan;
+        if (!plan) return [];
+        const metric = this._groqMetric;
+        if (!metric) {
+            return [
+                plan.model,
+                `context ${plan.contextEnabled ? `up to ${plan.contextPairLimit} pairs` : 'off'}`,
+                `prompt ~${plan.estimatedPromptTokens} tokens`,
+                `answer reserve ${plan.minimumAnswerTokens}+`,
+                `TPM ${plan.provisionalTpmLimit} provisional`,
+            ];
+        }
+
+        const usage = metric.usage;
+        const tokenLimits = metric.rateLimits?.tokens;
+        const cacheRatio =
+            usage?.cachedTokens !== null && usage?.promptTokens > 0
+                ? `${usage.cachedTokens}/${usage.promptTokens} (${Math.round((usage.cachedTokens / usage.promptTokens) * 100)}%)`
+                : 'not reported';
+        const quota =
+            tokenLimits?.remaining !== null && tokenLimits?.remaining !== undefined
+                ? `${tokenLimits.remaining}${tokenLimits.reset ? `, reset ${tokenLimits.reset}` : ''}`
+                : 'not reported';
+        const value = number => (number === null || number === undefined ? 'not reported' : number);
+
+        return [
+            metric.actualModel || metric.selectedModel || plan.model,
+            `context ${value(metric.includedPairs)} pairs${metric.trimmedMessages ? `, ${metric.trimmedMessages} messages trimmed` : ''}`,
+            `input est ${value(metric.estimatedInputTokens)} / actual ${value(usage?.promptTokens)}`,
+            `output planned ${value(metric.plannedCompletionTokens)} / actual ${value(usage?.completionTokens)}`,
+            `cache ${cacheRatio}`,
+            `TTFT ${value(metric.timings?.firstContentMs)} ms / total ${value(metric.timings?.totalMs)} ms`,
+            `TPM remaining ${quota}`,
+        ];
     }
 
     render() {

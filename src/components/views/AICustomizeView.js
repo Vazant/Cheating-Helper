@@ -126,6 +126,37 @@ export class AICustomizeView extends LitElement {
                 line-height: 1.45;
                 min-height: 36px;
             }
+            .context-toggle {
+                display: flex;
+                align-items: center;
+                gap: var(--space-sm);
+                color: var(--text-secondary);
+                font-size: var(--font-size-sm);
+            }
+            .context-toggle input {
+                accent-color: var(--accent);
+            }
+            .plan-grid {
+                display: grid;
+                grid-template-columns: repeat(3, minmax(0, 1fr));
+                gap: var(--space-sm);
+            }
+            .plan-item {
+                padding: var(--space-sm);
+                border: 1px solid var(--border);
+                border-radius: var(--radius-sm);
+                background: var(--bg-elevated);
+            }
+            .plan-label {
+                color: var(--text-muted);
+                font-size: var(--font-size-xs);
+            }
+            .plan-value {
+                margin-top: 3px;
+                color: var(--text-primary);
+                font-family: var(--font-mono);
+                font-size: var(--font-size-sm);
+            }
             details.preview-panel {
                 border-top: 1px solid var(--border);
                 padding-top: var(--space-lg);
@@ -156,7 +187,8 @@ export class AICustomizeView extends LitElement {
                     padding: var(--space-md);
                 }
                 .compact-grid,
-                .preference-grid {
+                .preference-grid,
+                .plan-grid {
                     grid-template-columns: 1fr;
                 }
                 .field-meta {
@@ -176,6 +208,7 @@ export class AICustomizeView extends LitElement {
         _profiles: { state: true },
         _draft: { state: true },
         _preview: { state: true },
+        _plan: { state: true },
         _error: { state: true },
         _copied: { state: true },
         _loadError: { state: true },
@@ -188,6 +221,7 @@ export class AICustomizeView extends LitElement {
         this._profiles = [];
         this._draft = null;
         this._preview = '';
+        this._plan = null;
         this._error = '';
         this._copied = false;
         this._loadError = '';
@@ -233,7 +267,15 @@ export class AICustomizeView extends LitElement {
     }
 
     async _refreshPreview() {
-        if (this._draft) this._preview = await window.cheatingDaddy.storage.compileAiProfile(this._draft);
+        if (!this._draft) return;
+        const draftId = this._draft.id;
+        const [preview, plan] = await Promise.all([
+            window.cheatingDaddy.storage.compileAiProfile(this._draft),
+            window.cheatingDaddy.storage.planAiProfile(this._draft),
+        ]);
+        if (this._draft?.id !== draftId) return;
+        this._preview = preview;
+        this._plan = plan;
     }
 
     async _patch(patch) {
@@ -252,6 +294,11 @@ export class AICustomizeView extends LitElement {
     _promptField(field, value) {
         this._draft = { ...this._draft, prompt: { ...this._draft.prompt, [field]: value } };
         return this._patch({ prompt: { [field]: value } });
+    }
+
+    _behaviorField(field, value) {
+        this._draft = { ...this._draft, behavior: { ...this._draft.behavior, [field]: value } };
+        return this._patch({ behavior: { [field]: value } });
     }
 
     async _new(sourceId = null) {
@@ -377,6 +424,64 @@ export class AICustomizeView extends LitElement {
                         </div>
                     </div>
 
+                    <div class="section">
+                        <div class="section-title">Conversation context</div>
+                        <div class="section-description">
+                            Controls how many completed question-and-answer pairs Groq receives with the next question. The current question and the
+                            profile prompt are always included.
+                        </div>
+                        <label class="context-toggle">
+                            <input
+                                type="checkbox"
+                                .checked=${this._draft.behavior.conversationContextEnabled}
+                                @change=${event => this._behaviorField('conversationContextEnabled', event.target.checked)}
+                            />
+                            Remember earlier answers in this session
+                        </label>
+                        <div class="form-group">
+                            <label class="form-label">Maximum completed pairs</label>
+                            <input
+                                class="control"
+                                type="number"
+                                min="0"
+                                max="20"
+                                step="1"
+                                .value=${String(this._draft.behavior.conversationContextCount)}
+                                ?disabled=${!this._draft.behavior.conversationContextEnabled}
+                                @change=${event => this._behaviorField('conversationContextCount', Number(event.target.value))}
+                            />
+                            <div class="form-help">0 sends no earlier pairs. 6 is the recommended starting point.</div>
+                        </div>
+                        ${
+                            this._plan
+                                ? html`
+                                      <div class="plan-grid">
+                                          ${this._planItem('Prompt estimate', `~${this._plan.estimatedPromptTokens.toLocaleString()} tokens`)}
+                                          ${this._planItem(
+                                          'Context',
+                                          this._plan.contextEnabled ? `up to ${this._plan.contextPairLimit} pairs` : 'off'
+                                      )}
+                                          ${this._planItem('Model', this._plan.model)}
+                                          ${this._planItem('TPM limit', `${this._plan.provisionalTpmLimit.toLocaleString()} provisional`)}
+                                          ${this._planItem('Answer reserve', `at least ${this._plan.minimumAnswerTokens.toLocaleString()}`)}
+                                          ${this._planItem(
+                                          'Maximum answer',
+                                          `up to ${this._plan.maximumAnswerTokensBeforeQuestion.toLocaleString()} before question/context`
+                                      )}
+                                      </div>
+                                      <div class="form-help">
+                                          These are planning estimates. Groq-reported usage and limits appear during the active session when
+                                          available.
+                                      </div>
+                                  `
+                                : ''
+                        }
+                        <div class="callout">
+                            Context settings are copied when you press Start. Editing this profile does not alter an active session; restart to apply
+                            changes.
+                        </div>
+                    </div>
+
                     <details class="preview-panel">
                         <summary>What will be sent to the AI · ${this._size(this._preview)}</summary>
                         <div class="preview-content">
@@ -416,6 +521,13 @@ export class AICustomizeView extends LitElement {
                 ${Object.entries(options).map(([id, [name]]) => html`<option value=${id}>${name}</option>`)}
             </select>
             <div class="preference-help">${options[value]?.[1] || ''}</div>
+        </div>`;
+    }
+
+    _planItem(label, value) {
+        return html`<div class="plan-item">
+            <div class="plan-label">${label}</div>
+            <div class="plan-value">${value}</div>
         </div>`;
     }
 }
