@@ -29,6 +29,7 @@ const {
     readGroqSseEvent,
     createSseParser,
     createAbortScope,
+    markIncompleteResponse,
 } = require('./groq');
 
 // Lazy-loaded to avoid circular dependency (localai.js imports from gemini.js)
@@ -145,7 +146,7 @@ function initializeNewSession(profile = null, customPrompt = null, metadata = {}
     }
 }
 
-function saveConversationTurn(transcription, aiResponse) {
+function saveConversationTurn(transcription, aiResponse, metadata = {}) {
     if (!currentSessionId) {
         initializeNewSession();
     }
@@ -154,6 +155,8 @@ function saveConversationTurn(transcription, aiResponse) {
         timestamp: Date.now(),
         transcription: transcription.trim(),
         ai_response: aiResponse.trim(),
+        status: metadata.status === 'incomplete' || metadata.status === 'failed' ? metadata.status : 'complete',
+        ...(metadata.reason ? { reason: metadata.reason } : {}),
     };
 
     conversationHistory.push(conversationTurn);
@@ -634,8 +637,21 @@ async function sendToGroq(transcription, requestContext = getHostedRequestContex
             parser.push(decoder.decode());
             parser.end();
         } catch (error) {
-            removeUserTurn();
             if (!isHostedRequestActive(requestContext) || error.name === 'AbortError') return false;
+            const partialResponse = stripThinkingTags(fullText).trim();
+            if (partialResponse) {
+                const markedResponse = markIncompleteResponse(partialResponse, 'stream-error');
+                groqConversationHistory.push({ role: 'assistant', content: markedResponse });
+                saveConversationTurn(transcription, partialResponse, { status: 'incomplete', reason: 'stream-error' });
+                sendToRenderer(
+                    isFirst ? 'new-response' : 'update-response',
+                    isFirst
+                        ? createResponsePayload(`${partialResponse}\n\n_Response interrupted before completion._`, transcription, responseId)
+                        : createResponseUpdate(`${partialResponse}\n\n_Response interrupted before completion._`, responseId)
+                );
+            } else {
+                removeUserTurn();
+            }
             console.error('Groq streaming error:', error);
             sendToRenderer('update-status', `Groq streaming error: ${error.message}`);
             return false;
@@ -671,10 +687,9 @@ async function sendToGroq(transcription, requestContext = getHostedRequestContex
             })
         );
 
-        groqConversationHistory.push({ role: 'assistant', content: cleanedResponse });
-        saveConversationTurn(transcription, cleanedResponse);
-
         if (finishReason === 'length') {
+            groqConversationHistory.push({ role: 'assistant', content: markIncompleteResponse(cleanedResponse, 'length') });
+            saveConversationTurn(transcription, cleanedResponse, { status: 'incomplete', reason: 'length' });
             sendToRenderer(
                 'update-response',
                 createResponseUpdate(`${cleanedResponse}\n\n_Response stopped because the token limit was reached._`, responseId)
@@ -683,6 +698,8 @@ async function sendToGroq(transcription, requestContext = getHostedRequestContex
             return true;
         }
 
+        groqConversationHistory.push({ role: 'assistant', content: cleanedResponse });
+        saveConversationTurn(transcription, cleanedResponse);
         console.log(`Groq response completed (${model})`);
         sendToRenderer('update-status', 'Listening...');
         return true;

@@ -515,6 +515,8 @@ Evidence:
 
 ### Блок 3 — Единая политика incomplete и failed turns
 
+Статус блока: `IN_PROGRESS` — implementation и automated checks готовы; live forced-truncation smoke заблокирован решением 9
+
 Предлагаемый commit: `fix: keep visible and model conversation consistent`
 
 Scope:
@@ -545,7 +547,19 @@ Rollback:
 
 - Откатить turn-state commit; storage migration должна быть backward compatible.
 
+Evidence:
+
+- `complete`/`incomplete` status сохраняется backward-compatible в conversation history.
+- Length и partial stream ответы получают явный marker только в model context.
+- Live response и History показывают incomplete state; успешные ответы не получают marker.
+- Incomplete-turn checks: 3/3 passed.
+- Полная регрессия: 22/22 tests passed.
+- `npm.cmd run package`: passed для Windows x64.
+- Manual forced live truncation/stream interruption: `BLOCKED` до отдельного разрешения live calls.
+
 ### Блок 4 — Очистить и стабилизировать built-in prompts
+
+Статус блока: `IN_PROGRESS`
 
 Предлагаемый commit: `fix: remove conflicts from Groq profile prompts`
 

@@ -172,7 +172,6 @@ test('remaining runtime consistency gaps are explicit baseline contracts', () =>
     const source = fs.readFileSync(require.resolve('../src/utils/gemini'), 'utf8');
     const sendToGroq = source.slice(source.indexOf('async function sendToGroq'), source.indexOf('async function sendGroqImage'));
 
-    assert.ok(sendToGroq.indexOf("groqConversationHistory.push({ role: 'assistant'") < sendToGroq.indexOf("finishReason === 'length'"));
     assert.ok(!sendToGroq.includes('prompt_tokens'));
     assert.ok(!sendToGroq.includes('cached_tokens'));
 });

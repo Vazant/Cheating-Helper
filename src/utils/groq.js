@@ -178,6 +178,11 @@ function createAbortScope() {
     };
 }
 
+function markIncompleteResponse(text, reason) {
+    const label = reason === 'length' ? 'token limit reached' : 'stream interrupted';
+    return `${String(text || '').trim()}\n\n[INCOMPLETE RESPONSE: ${label}]`;
+}
+
 module.exports = {
     DEFAULT_GROQ_MODEL,
     GROQ_MODELS,
@@ -198,4 +203,5 @@ module.exports = {
     readGroqSseEvent,
     createSseParser,
     createAbortScope,
+    markIncompleteResponse,
 };

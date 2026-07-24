@@ -18,12 +18,26 @@ fs.writeFileSync(
             {
                 id: 'profile_senior_java_interview',
                 name: 'Senior Java Interview',
-                prompt: { userContext: 'java facts', persona: 'java persona', answerRules: 'java rules', responseStyle: 'java style', length: 'detailed', format: 'teleprompter' },
+                prompt: {
+                    userContext: 'java facts',
+                    persona: 'java persona',
+                    answerRules: 'java rules',
+                    responseStyle: 'java style',
+                    length: 'detailed',
+                    format: 'teleprompter',
+                },
             },
             {
                 id: 'profile_epam_hr_call',
                 name: 'EPAM HR Call',
-                prompt: { userContext: 'old facts', persona: 'old persona', answerRules: 'old rules', responseStyle: 'old style', length: 'concise', format: 'teleprompter' },
+                prompt: {
+                    userContext: 'old facts',
+                    persona: 'old persona',
+                    answerRules: 'old rules',
+                    responseStyle: 'old style',
+                    length: 'concise',
+                    format: 'teleprompter',
+                },
             },
         ],
         migrations: {},
@@ -36,7 +50,7 @@ try {
     assert.strictEqual(storage.normalizeAudioMode('both'), 'speaker_only');
     assert.strictEqual(storage.normalizeAudioMode('mic_only'), 'mic_only');
     storage.initializeStorage();
-    assert.ok(storage.getAiProfile('profile_epam_hr_call').prompt.answerRules.includes("Why are you changing jobs?"));
+    assert.ok(storage.getAiProfile('profile_epam_hr_call').prompt.answerRules.includes('Why are you changing jobs?'));
     assert.deepStrictEqual(storage.getGroqApiKeys(), ['legacy-key']);
     assert.strictEqual(storage.getCredentials().unrelated, 'preserved');
 
@@ -83,10 +97,21 @@ try {
         profile: 'profile_senior_java_interview',
         profileName: 'Senior Java Interview',
         language: 'en-US',
+        conversationHistory: [
+            {
+                timestamp: 1234567891,
+                transcription: 'Long question',
+                ai_response: 'Partial answer',
+                status: 'incomplete',
+                reason: 'length',
+            },
+        ],
     });
     const savedSession = storage.getSession('1234567890');
     assert.strictEqual(savedSession.profileName, 'Senior Java Interview');
     assert.strictEqual(savedSession.language, 'en-US');
+    assert.strictEqual(savedSession.conversationHistory[0].status, 'incomplete');
+    assert.strictEqual(savedSession.conversationHistory[0].reason, 'length');
     const sessionSummary = storage.getAllSessions().find(session => session.sessionId === '1234567890');
     assert.strictEqual(sessionSummary.profileName, 'Senior Java Interview');
     assert.strictEqual(sessionSummary.language, 'en-US');

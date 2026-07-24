@@ -374,7 +374,14 @@ export class HistoryView extends LitElement {
         const history = session.conversationHistory || [];
         history.forEach(turn => {
             if (turn.transcription) messages.push({ type: 'user', content: turn.transcription, timestamp: turn.timestamp });
-            if (turn.ai_response) messages.push({ type: 'ai', content: turn.ai_response, timestamp: turn.timestamp });
+            if (turn.ai_response)
+                messages.push({
+                    type: 'ai',
+                    content: turn.ai_response,
+                    timestamp: turn.timestamp,
+                    status: turn.status || 'complete',
+                    reason: turn.reason || null,
+                });
         });
         return messages;
     }
@@ -390,7 +397,10 @@ export class HistoryView extends LitElement {
                     <div class="message-row ${msg.type}">
                         <div class="message">
                             <div class="message-body">${msg.content}</div>
-                            <div class="message-meta">${this.formatTime(msg.timestamp)}</div>
+                            <div class="message-meta">
+                                ${this.formatTime(msg.timestamp)}
+                                ${msg.type === 'ai' && msg.status !== 'complete' ? ` · ${msg.status}${msg.reason ? ` (${msg.reason})` : ''}` : ''}
+                            </div>
                         </div>
                     </div>
                 `
@@ -517,24 +527,24 @@ export class HistoryView extends LitElement {
                 <button
                     class="tab-btn ${this.activeTab === 'conversation' ? 'active' : ''}"
                     @click=${() => {
-                    this.activeTab = 'conversation';
-                }}
+                        this.activeTab = 'conversation';
+                    }}
                 >
                     Conversation (${conversationCount})
                 </button>
                 <button
                     class="tab-btn ${this.activeTab === 'screen' ? 'active' : ''}"
                     @click=${() => {
-                    this.activeTab = 'screen';
-                }}
+                        this.activeTab = 'screen';
+                    }}
                 >
                     Screen (${screenCount})
                 </button>
                 <button
                     class="tab-btn ${this.activeTab === 'context' ? 'active' : ''}"
                     @click=${() => {
-                    this.activeTab = 'context';
-                }}
+                        this.activeTab = 'context';
+                    }}
                 >
                     Context
                 </button>
