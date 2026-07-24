@@ -89,6 +89,18 @@ assert.ok(epamPrompt.includes('This is a CV selection decision, not a period wit
 assert.ok(epamPrompt.includes('omitted Jaspersoft, BPMN configuration and other non-Java-primary responsibilities'));
 assert.ok(epamPrompt.includes('Never imply unemployment, inactivity or an attempt to hide work'));
 
+const seniorJavaDeveloperProfilePath = require.resolve('../profiles/senior-java-developer.json');
+const seniorJavaDeveloperProfile = importProfile(fs.readFileSync(seniorJavaDeveloperProfilePath, 'utf8'));
+const seniorJavaDeveloperPrompt = compileProfile(seniorJavaDeveloperProfile, { language: 'en-US' });
+assert.strictEqual(seniorJavaDeveloperProfile.id, 'profile_senior_java_developer');
+assert.strictEqual(seniorJavaDeveloperProfile.name, 'Senior Java Developer');
+assert.strictEqual(seniorJavaDeveloperProfile.prompt.length, 'auto');
+assert.strictEqual(seniorJavaDeveloperProfile.prompt.format, 'structured');
+assert.ok(seniorJavaDeveloperPrompt.includes('smallest justified change'));
+assert.ok(seniorJavaDeveloperPrompt.includes('Respect the Java Memory Model'));
+assert.ok(seniorJavaDeveloperPrompt.includes('Never retry non-idempotent work blindly'));
+assert.ok(seniorJavaDeveloperPrompt.includes('Never claim that code builds, tests pass'));
+
 const uiSource = fs.readFileSync(require.resolve('../src/components/views/AICustomizeView'), 'utf8');
 for (const removed of ['Expertise / Coverage', 'Length Override', 'Format Override', 'Search Policy', '>Advanced<'])
     assert.ok(!uiSource.includes(removed));
