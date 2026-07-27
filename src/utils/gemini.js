@@ -13,7 +13,7 @@ const {
     getAiProfile,
 } = require('../storage');
 const { connectCloud, sendCloudAudio, sendCloudText, sendCloudImage, closeCloud, isCloudActive, setOnTurnComplete } = require('./cloud');
-const { GROQ_VISION_MODEL, buildVisionPrompt } = require('./vision');
+const { GROQ_VISION_MODEL, buildVisionPrompt, buildVisionSystemPrompt } = require('./vision');
 const { getLanguageConfig } = require('./aiProfiles');
 const { createSpeechSegmenter, createManualAudioChunker, joinTranscriptParts, encodePcm16Wav } = require('./audioPipeline');
 const { createResponseId, createResponsePayload, createResponseUpdate } = require('./responsePayload');
@@ -967,7 +967,7 @@ async function sendGroqImage(base64Data, prompt, requestContext = getHostedReque
                 body: JSON.stringify({
                     model: GROQ_VISION_MODEL,
                     messages: [
-                        { role: 'system', content: currentSystemPrompt || 'You are a helpful assistant.' },
+                        { role: 'system', content: buildVisionSystemPrompt(currentSystemPrompt) },
                         {
                             role: 'user',
                             content: [
@@ -1649,7 +1649,7 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
                 result = await getLocalAi().sendLocalImage(data, visionPrompt, {
                     host: prefs.ollamaHost,
                     model: prefs.ollamaVisionModel,
-                    systemPrompt: currentSystemPrompt,
+                    systemPrompt: buildVisionSystemPrompt(currentSystemPrompt),
                 });
             } else {
                 return { success: false, error: `Unsupported Vision provider: ${prefs.visionProvider}` };

@@ -2,6 +2,7 @@ const assert = require('assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { LEGACY_DEFAULT_SCREEN_ANALYSIS_PROMPT, DEFAULT_SCREEN_ANALYSIS_PROMPT } = require('../src/utils/vision');
 
 const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'cheating-helper-storage-'));
 process.env.USERPROFILE = tempHome;
@@ -12,7 +13,12 @@ fs.writeFileSync(path.join(configDir, 'config.json'), JSON.stringify({ configVer
 fs.writeFileSync(path.join(configDir, 'credentials.json'), JSON.stringify({ groqApiKey: 'legacy-key', unrelated: 'preserved' }), 'utf8');
 fs.writeFileSync(
     path.join(configDir, 'preferences.json'),
-    JSON.stringify({ selectedLanguage: 'ru-RU', selectedProfile: 'profile_senior_java_interview', speechCaptureMode: 'always' }),
+    JSON.stringify({
+        selectedLanguage: 'ru-RU',
+        selectedProfile: 'profile_senior_java_interview',
+        speechCaptureMode: 'always',
+        screenAnalysisPrompt: LEGACY_DEFAULT_SCREEN_ANALYSIS_PROMPT,
+    }),
     'utf8'
 );
 fs.writeFileSync(path.join(configDir, 'keybinds.json'), JSON.stringify({ toggleSpeechCapture: 'F7' }), 'utf8');
@@ -32,6 +38,7 @@ fs.writeFileSync(
                     length: 'detailed',
                     format: 'teleprompter',
                 },
+                behavior: { conversationContextEnabled: false, conversationContextCount: 4 },
             },
             {
                 id: 'profile_epam_hr_call',
@@ -46,7 +53,11 @@ fs.writeFileSync(
                 },
             },
         ],
-        migrations: {},
+        migrations: {
+            seniorJavaInterviewV2: { done: true, updated: true },
+            seniorJavaInterviewV3: { done: true, updated: true },
+            seniorJavaInterviewV4: { done: true, updated: true },
+        },
     }),
     'utf8'
 );
@@ -59,6 +70,19 @@ try {
     assert.strictEqual(storage.getConfig().preserved, true);
     assert.strictEqual(storage.getConfig().configVersion, 1);
     assert.ok(storage.getAiProfile('profile_epam_hr_call').prompt.answerRules.includes('Why are you changing jobs?'));
+    const seniorJavaInterview = storage.getAiProfile('profile_senior_java_interview');
+    assert.strictEqual(seniorJavaInterview.prompt.userContext, 'java facts');
+    assert.strictEqual(seniorJavaInterview.prompt.length, 'concise');
+    assert.ok(seniorJavaInterview.prompt.responseStyle.includes('B1-B2'));
+    assert.ok(seniorJavaInterview.prompt.answerRules.includes('clean, complete Java code'));
+    assert.ok(seniorJavaInterview.prompt.answerRules.includes('Explain this at Senior Java interview level'));
+    assert.ok(seniorJavaInterview.prompt.answerRules.includes('Never invent speculative consequences'));
+    assert.ok(seniorJavaInterview.prompt.answerRules.includes('do not stop at a definition'));
+    assert.deepStrictEqual(seniorJavaInterview.behavior, { conversationContextEnabled: false, conversationContextCount: 4 });
+    assert.deepStrictEqual(storage.getProfileStore().migrations.seniorJavaInterviewV2, { done: true, updated: true });
+    assert.deepStrictEqual(storage.getProfileStore().migrations.seniorJavaInterviewV3, { done: true, updated: true });
+    assert.deepStrictEqual(storage.getProfileStore().migrations.seniorJavaInterviewV4, { done: true, updated: true });
+    assert.deepStrictEqual(storage.getProfileStore().migrations.seniorJavaInterviewV5, { done: true, updated: true });
     assert.deepStrictEqual(storage.getGroqApiKeys(), ['legacy-key']);
     assert.strictEqual(storage.getCredentials().unrelated, 'preserved');
 
@@ -82,7 +106,8 @@ try {
     assert.strictEqual(defaults.visionProvider, 'groq');
     assert.strictEqual(defaults.groqVisionModel, 'qwen/qwen3.6-27b');
     assert.strictEqual(defaults.ollamaVisionModel, 'qwen3-vl:4b');
-    assert.ok(defaults.screenAnalysisPrompt.length > 20);
+    assert.strictEqual(defaults.screenAnalysisPrompt, DEFAULT_SCREEN_ANALYSIS_PROMPT);
+    assert.strictEqual(JSON.parse(fs.readFileSync(path.join(configDir, 'preferences.json'), 'utf8')).screenAnalysisPrompt, DEFAULT_SCREEN_ANALYSIS_PROMPT);
     assert.strictEqual(defaults.visionIncludeConversation, true);
     assert.ok(defaults.availableProfiles.some(profile => profile.id === 'profile_senior_java_interview'));
     assert.ok(defaults.availableProfiles.some(profile => profile.id === 'interview' && profile.isBuiltin));
@@ -92,6 +117,9 @@ try {
     storage.updatePreference('ollamaVisionModel', 'custom-vl:latest');
     assert.strictEqual(storage.getPreferences().visionProvider, 'ollama');
     assert.strictEqual(storage.getPreferences().ollamaVisionModel, 'custom-vl:latest');
+    storage.updatePreference('screenAnalysisPrompt', 'Keep this custom screenshot instruction exactly.');
+    storage.initializeStorage();
+    assert.strictEqual(storage.getPreferences().screenAnalysisPrompt, 'Keep this custom screenshot instruction exactly.');
     storage.updatePreference('speechCaptureMode', 'toggle');
     assert.strictEqual(storage.getPreferences().speechCaptureMode, 'toggle');
     storage.updatePreference('speechCaptureMode', 'invalid');

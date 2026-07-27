@@ -68,6 +68,8 @@ async function main() {
                 systemShortcut: settings.keybinds.toggleSystemAudio,
                 microphoneShortcut: settings.keybinds.toggleMicrophone,
                 hasOldShortcut: Object.hasOwn(settings.keybinds, 'toggleSpeechCapture'),
+                language: settings.shadowRoot.querySelector('#speech-language')?.value,
+                languageLabel: settings.shadowRoot.querySelector('#speech-language')?.selectedOptions[0]?.textContent.trim(),
                 overflowingElements: [...settings.shadowRoot.querySelectorAll('*')]
                     .filter(element => element.scrollWidth > element.clientWidth + 1)
                     .map(element => ({
@@ -85,6 +87,22 @@ async function main() {
         awaitPromise: true,
         returnByValue: true,
     });
+    const profileResult = await call('Runtime.evaluate', {
+        expression: `(async () => {
+            const app = document.querySelector('cheating-daddy-app');
+            app.navigate('ai-customize');
+            await app.updateComplete;
+            const profiles = app.shadowRoot.querySelector('ai-customize-view');
+            await profiles.updateComplete;
+            const select = profiles.shadowRoot.querySelector('#session-profile');
+            return JSON.stringify({
+                profile: select?.value,
+                profileLabel: select?.selectedOptions[0]?.textContent.trim()
+            });
+        })()`,
+        awaitPromise: true,
+        returnByValue: true,
+    });
     const screenshotPath = process.argv[3];
     if (screenshotPath) {
         const screenshot = await call('Page.captureScreenshot', {
@@ -96,6 +114,7 @@ async function main() {
     socket.close();
     console.log(result.result.value);
     console.log(settingsResult.result.value);
+    console.log(profileResult.result.value);
 }
 
 main().catch(error => {

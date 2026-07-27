@@ -2,7 +2,13 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { DEFAULT_GROQ_MODEL, GROQ_MODELS } = require('./utils/groq');
-const { GROQ_VISION_MODEL, DEFAULT_OLLAMA_VISION_MODEL, DEFAULT_SCREEN_ANALYSIS_PROMPT, normalizeVisionProvider } = require('./utils/vision');
+const {
+    GROQ_VISION_MODEL,
+    DEFAULT_OLLAMA_VISION_MODEL,
+    LEGACY_DEFAULT_SCREEN_ANALYSIS_PROMPT,
+    DEFAULT_SCREEN_ANALYSIS_PROMPT,
+    normalizeVisionProvider,
+} = require('./utils/vision');
 const { PROFILE_SCHEMA_VERSION, SENIOR_JAVA_PROFILE, importProfile, normalizeProfile, normalizeUserProfiles } = require('./utils/aiProfiles');
 const { getAvailableProfiles } = require('./utils/prompts');
 const EPAM_HR_PROFILE_V2 = normalizeProfile(require('../profiles/epam-hr-call.json').profile);
@@ -115,7 +121,14 @@ const DEFAULT_PREFERENCES = {
 const DEFAULT_PROFILE_STORE = {
     schemaVersion: PROFILE_SCHEMA_VERSION,
     userProfiles: [SENIOR_JAVA_PROFILE],
-    migrations: { customPromptV1: { done: false, profileId: null }, epamHrProfileV2: { done: false, updated: false } },
+    migrations: {
+        customPromptV1: { done: false, profileId: null },
+        epamHrProfileV2: { done: false, updated: false },
+        seniorJavaInterviewV2: { done: false, updated: false },
+        seniorJavaInterviewV3: { done: false, updated: false },
+        seniorJavaInterviewV4: { done: false, updated: false },
+        seniorJavaInterviewV5: { done: false, updated: false },
+    },
 };
 
 const DEFAULT_KEYBINDS = null; // null means use system defaults
@@ -275,6 +288,10 @@ function initializeStorage() {
     persistPreferences(getPreferences());
     migrateLegacyCustomPrompt();
     migrateEpamHrProfileV2();
+    migrateSeniorJavaInterviewV2();
+    migrateSeniorJavaInterviewV3();
+    migrateSeniorJavaInterviewV4();
+    migrateSeniorJavaInterviewV5();
 }
 
 // ============ CONFIG ============
@@ -371,7 +388,9 @@ function getPreferences() {
                 : DEFAULT_OLLAMA_VISION_MODEL,
         screenAnalysisPrompt:
             typeof saved.screenAnalysisPrompt === 'string' && saved.screenAnalysisPrompt.trim()
-                ? saved.screenAnalysisPrompt
+                ? saved.screenAnalysisPrompt === LEGACY_DEFAULT_SCREEN_ANALYSIS_PROMPT
+                    ? DEFAULT_SCREEN_ANALYSIS_PROMPT
+                    : saved.screenAnalysisPrompt
                 : DEFAULT_SCREEN_ANALYSIS_PROMPT,
         visionIncludeConversation: saved.visionIncludeConversation !== false,
         availableProfiles: listAiProfiles(),
@@ -440,6 +459,22 @@ function getProfileStore() {
             epamHrProfileV2: {
                 done: saved.migrations?.epamHrProfileV2?.done === true,
                 updated: saved.migrations?.epamHrProfileV2?.updated === true,
+            },
+            seniorJavaInterviewV2: {
+                done: saved.migrations?.seniorJavaInterviewV2?.done === true,
+                updated: saved.migrations?.seniorJavaInterviewV2?.updated === true,
+            },
+            seniorJavaInterviewV3: {
+                done: saved.migrations?.seniorJavaInterviewV3?.done === true,
+                updated: saved.migrations?.seniorJavaInterviewV3?.updated === true,
+            },
+            seniorJavaInterviewV4: {
+                done: saved.migrations?.seniorJavaInterviewV4?.done === true,
+                updated: saved.migrations?.seniorJavaInterviewV4?.updated === true,
+            },
+            seniorJavaInterviewV5: {
+                done: saved.migrations?.seniorJavaInterviewV5?.done === true,
+                updated: saved.migrations?.seniorJavaInterviewV5?.updated === true,
             },
         },
     };
@@ -561,6 +596,82 @@ function migrateEpamHrProfileV2() {
     const index = store.userProfiles.findIndex(profile => profile.id === EPAM_HR_PROFILE_V2.id);
     if (index >= 0) store.userProfiles[index] = EPAM_HR_PROFILE_V2;
     store.migrations.epamHrProfileV2 = { done: true, updated: index >= 0 };
+    setProfileStore(store);
+}
+
+function migrateSeniorJavaInterviewV2() {
+    const store = getProfileStore();
+    if (store.migrations.seniorJavaInterviewV2.done) return;
+    const index = store.userProfiles.findIndex(profile => profile.id === SENIOR_JAVA_PROFILE.id);
+    if (index >= 0) {
+        const existing = store.userProfiles[index];
+        store.userProfiles[index] = normalizeProfile({
+            ...SENIOR_JAVA_PROFILE,
+            prompt: {
+                ...SENIOR_JAVA_PROFILE.prompt,
+                userContext: existing.prompt.userContext,
+            },
+            behavior: existing.behavior,
+        });
+    }
+    store.migrations.seniorJavaInterviewV2 = { done: true, updated: index >= 0 };
+    setProfileStore(store);
+}
+
+function migrateSeniorJavaInterviewV3() {
+    const store = getProfileStore();
+    if (store.migrations.seniorJavaInterviewV3.done) return;
+    const index = store.userProfiles.findIndex(profile => profile.id === SENIOR_JAVA_PROFILE.id);
+    if (index >= 0) {
+        const existing = store.userProfiles[index];
+        store.userProfiles[index] = normalizeProfile({
+            ...SENIOR_JAVA_PROFILE,
+            prompt: {
+                ...SENIOR_JAVA_PROFILE.prompt,
+                userContext: existing.prompt.userContext,
+            },
+            behavior: existing.behavior,
+        });
+    }
+    store.migrations.seniorJavaInterviewV3 = { done: true, updated: index >= 0 };
+    setProfileStore(store);
+}
+
+function migrateSeniorJavaInterviewV4() {
+    const store = getProfileStore();
+    if (store.migrations.seniorJavaInterviewV4.done) return;
+    const index = store.userProfiles.findIndex(profile => profile.id === SENIOR_JAVA_PROFILE.id);
+    if (index >= 0) {
+        const existing = store.userProfiles[index];
+        store.userProfiles[index] = normalizeProfile({
+            ...SENIOR_JAVA_PROFILE,
+            prompt: {
+                ...SENIOR_JAVA_PROFILE.prompt,
+                userContext: existing.prompt.userContext,
+            },
+            behavior: existing.behavior,
+        });
+    }
+    store.migrations.seniorJavaInterviewV4 = { done: true, updated: index >= 0 };
+    setProfileStore(store);
+}
+
+function migrateSeniorJavaInterviewV5() {
+    const store = getProfileStore();
+    if (store.migrations.seniorJavaInterviewV5.done) return;
+    const index = store.userProfiles.findIndex(profile => profile.id === SENIOR_JAVA_PROFILE.id);
+    if (index >= 0) {
+        const existing = store.userProfiles[index];
+        store.userProfiles[index] = normalizeProfile({
+            ...SENIOR_JAVA_PROFILE,
+            prompt: {
+                ...SENIOR_JAVA_PROFILE.prompt,
+                userContext: existing.prompt.userContext,
+            },
+            behavior: existing.behavior,
+        });
+    }
+    store.migrations.seniorJavaInterviewV5 = { done: true, updated: index >= 0 };
     setProfileStore(store);
 }
 

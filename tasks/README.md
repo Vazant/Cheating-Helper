@@ -37,3 +37,5 @@
 | 029  | Полный аудит приложения и отложенный backlog                   | TODO — FUTURE | Активный приоритет перенесён в 027                                        |
 | 030  | Toggle-to-Talk F8/F9, длинная запись и устойчивые настройки    | IN_PROGRESS   | Код, тесты и сборка готовы; реальный UI/audio smoke отложен пользователем |
 | 031  | Settings UI redesign                                           | DONE          | Renderer-verified at normal and narrow widths                             |
+| 032  | Senior Java Interview: живые B1–B2 ответы и coding task        | IN_PROGRESS   | Исправляется визуальное отображение сохранённых языка и профиля            |
+| 033  | Платный Groq fallback после бесплатной квоты                   | BLOCKED       | Нужны scope Text/STT/Vision, отдельный paid billing scope и месячный лимит |

@@ -60,7 +60,58 @@ const originalName = builtIns[0].name;
 builtIns[0].name = 'Mutated local clone';
 assert.strictEqual(createBuiltInProfiles(profilePrompts)[0].name, originalName);
 assert.strictEqual(SENIOR_JAVA_PROFILE.coveragePacks, undefined);
-assert.ok(SENIOR_JAVA_PROFILE.prompt.answerRules.includes('Spring'));
+assert.strictEqual(SENIOR_JAVA_PROFILE.id, 'profile_senior_java_interview');
+assert.strictEqual(SENIOR_JAVA_PROFILE.name, 'Senior Java Interview');
+assert.strictEqual(SENIOR_JAVA_PROFILE.prompt.length, 'concise');
+assert.strictEqual(SENIOR_JAVA_PROFILE.prompt.format, 'teleprompter');
+assert.strictEqual(SENIOR_JAVA_PROFILE.behavior.conversationContextCount, 6);
+const seniorJavaInterviewPrompt = compileProfile(SENIOR_JAVA_PROFILE, { language: 'en-US' });
+for (const instruction of [
+    'response language required by the LANGUAGE section',
+    'B1-B2-level vocabulary',
+    'Explain this at Senior Java interview level',
+    'do not stop at a definition',
+    'the problem it solves and where it is used',
+    'one useful under-the-hood idea',
+    'These are priorities, not a rigid checklist',
+    'demonstrate Senior-level understanding',
+    'create natural follow-up paths',
+    'For a narrower technical question',
+    'documented API contracts from typical current-version implementation details and from worst-case behavior',
+    'Never invent speculative consequences',
+    'exact wire-format segments',
+    'internal field or variable names',
+    'exact name should be verified rather than guessing',
+    'this rule overrides the normal-question rule',
+    'Spring Core',
+    'Spring Security',
+    'Spring AOP',
+    'cloud, microservices, testing, engineering methodologies and databases',
+    'State time and space complexity',
+    'clean, complete Java code',
+    'do not repeat or extend the previous answer',
+    'use only facts from User Context',
+])
+    assert.ok(seniorJavaInterviewPrompt.includes(instruction));
+assert.ok(seniorJavaInterviewPrompt.includes('Always reply in English'));
+const seniorJavaInterviewRussianPrompt = compileProfile(SENIOR_JAVA_PROFILE, { language: 'ru-RU' });
+assert.ok(seniorJavaInterviewRussianPrompt.includes('Always reply in Russian'));
+assert.ok(!seniorJavaInterviewRussianPrompt.includes('Always reply in English'));
+assert.ok(!SENIOR_JAVA_PROFILE.prompt.persona.includes('English'));
+assert.ok(!SENIOR_JAVA_PROFILE.prompt.responseStyle.includes('English'));
+assert.ok(seniorJavaInterviewPrompt.includes('Never add unrelated background just to reach a target length'));
+assert.ok(!seniorJavaInterviewPrompt.includes('Code snippets must be no more than 10 lines'));
+for (const removed of [
+    'Give the shortest answer',
+    'only the main mechanism needed for this question',
+    'important contract or guarantee',
+    'performance or failure behavior',
+    'practical production choice',
+    'five or six compact sentences',
+    '1-3 for a simple factual answer',
+    'about 3-6',
+])
+    assert.ok(!seniorJavaInterviewPrompt.includes(removed));
 
 const portable = JSON.stringify({ schemaVersion: 2, type: 'cheating-helper-profile', profile: { name: 'Round trip', prompt: minimal.prompt } });
 assert.strictEqual(importProfile(portable).name, 'Round trip');
@@ -77,7 +128,7 @@ assert.ok(epamPrompt.includes('Always reply in English'));
 assert.ok(epamPrompt.includes("Greetings, thanks and 'How are you?' get 1-2 natural sentences"));
 assert.ok(epamPrompt.includes("Keep 'Why are you changing jobs?' separate from 'Why EPAM?'"));
 assert.ok(epamPrompt.includes('Rephrased questions must preserve the same facts and core position'));
-assert.ok(epamPrompt.includes('Never add unrelated background just to reach a sentence count'));
+assert.ok(epamPrompt.includes('Never add unrelated background just to reach a target length'));
 assert.ok(epamPrompt.includes('JOB CHANGE:'));
 assert.ok(epamPrompt.includes('WHY EPAM:'));
 assert.ok(epamPrompt.includes('give a 60-90 second recruiter introduction in this order'));

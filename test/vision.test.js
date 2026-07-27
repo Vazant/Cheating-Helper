@@ -3,8 +3,11 @@ const fs = require('fs');
 const {
     GROQ_VISION_MODEL,
     DEFAULT_OLLAMA_VISION_MODEL,
+    DEFAULT_SCREEN_ANALYSIS_PROMPT,
+    VISION_GROUNDING_POLICY,
     normalizeVisionProvider,
     buildVisionPrompt,
+    buildVisionSystemPrompt,
     hasVisionCapability,
 } = require('../src/utils/vision');
 
@@ -16,6 +19,11 @@ assert.strictEqual(normalizeVisionProvider('unknown'), 'groq');
 assert.strictEqual(hasVisionCapability({ capabilities: ['completion', 'vision'] }), true);
 assert.strictEqual(hasVisionCapability({ capabilities: ['completion'] }), false);
 assert.strictEqual(hasVisionCapability({}), false);
+assert.ok(DEFAULT_SCREEN_ANALYSIS_PROMPT.includes('single main visible question'));
+assert.ok(!DEFAULT_SCREEN_ANALYSIS_PROMPT.includes('controls, and layout'));
+assert.ok(VISION_GROUNDING_POLICY.includes('compiler error'));
+assert.ok(VISION_GROUNDING_POLICY.includes('only code is visible'));
+assert.ok(VISION_GROUNDING_POLICY.includes('Never invent'));
 
 const history = [
     { transcription: 'old', ai_response: 'old answer' },
@@ -29,6 +37,10 @@ assert.ok(!prompt.includes('old answer'));
 assert.ok(prompt.includes('recent one'));
 assert.ok(prompt.includes('recent two'));
 assert.ok(!buildVisionPrompt('SCREEN', '', history, false).includes('Recent conversation'));
+const systemPrompt = buildVisionSystemPrompt('PROFILE');
+assert.ok(systemPrompt.startsWith('PROFILE'));
+assert.ok(systemPrompt.indexOf('PROFILE') < systemPrompt.indexOf('Screenshot grounding rules'));
+assert.ok(systemPrompt.includes('Profile rules must not add facts or requirements absent from the screenshot'));
 
 const geminiSource = fs.readFileSync(require.resolve('../src/utils/gemini'), 'utf8');
 assert.ok(geminiSource.includes("prefs.visionProvider === 'groq'"));
@@ -38,6 +50,7 @@ assert.ok(geminiSource.includes('data:image/jpeg;base64'));
 assert.ok(!geminiSource.includes('getGroqFallbackOrder(prefs.groqVisionModel'));
 assert.ok(geminiSource.includes('getGroqVisionRequestOptions()'));
 assert.ok(!geminiSource.includes('max_tokens: 2048'));
+assert.strictEqual((geminiSource.match(/buildVisionSystemPrompt\(currentSystemPrompt\)/g) || []).length, 2);
 
 const localSource = fs.readFileSync(require.resolve('../src/utils/localai'), 'utf8');
 assert.ok(localSource.includes('client.show({ model: visionModel })'));
@@ -47,5 +60,6 @@ const settingsSource = fs.readFileSync(require.resolve('../src/components/views/
 for (const text of ['Vision Provider', 'Groq — Hosted quality', 'Ollama — Local/private', 'Screenshot Instruction', 'Refresh Ollama models']) {
     assert.ok(settingsSource.includes(text));
 }
+assert.ok(settingsSource.includes(DEFAULT_SCREEN_ANALYSIS_PROMPT));
 
 console.log('Vision settings and routing: OK');

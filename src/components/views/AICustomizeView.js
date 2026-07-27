@@ -3,7 +3,7 @@ import { unifiedPageStyles } from './sharedPageStyles.js';
 
 const LENGTHS = {
     auto: ['Automatic', 'Adapts to the question: short for simple topics, fuller for technical explanations.'],
-    concise: ['Short', 'About 4–6 sentences with only the essential mechanism and conclusion.'],
+    concise: ['Short', 'A compact, self-contained answer with enough reasoning for the selected profile.'],
     standard: ['Full', 'About 10–18 sentences with an example, pitfalls, and trade-offs.'],
     detailed: ['Deep', 'About 18–30 sentences for internals, alternatives, and production details.'],
 };
@@ -363,10 +363,14 @@ export class AICustomizeView extends LitElement {
                 <section class="surface profile-form">
                     <div class="section">
                         <div class="form-group">
-                            <label class="form-label">Profile for next session</label
-                            ><select class="control" .value=${this._draft.id} @change=${e => this._select(e.target.value)}>
-                                <optgroup label="Built-in">${builtIns.map(x => html`<option value=${x.id}>${x.name}</option>`)}</optgroup>
-                                <optgroup label="My profiles">${custom.map(x => html`<option value=${x.id}>${x.name}</option>`)}</optgroup>
+                            <label class="form-label" for="session-profile">Profile for next session</label
+                            ><select id="session-profile" class="control" @change=${e => this._select(e.target.value)}>
+                                <optgroup label="Built-in">
+                                    ${builtIns.map(x => html`<option value=${x.id} ?selected=${this._draft.id === x.id}>${x.name}</option>`)}
+                                </optgroup>
+                                <optgroup label="My profiles">
+                                    ${custom.map(x => html`<option value=${x.id} ?selected=${this._draft.id === x.id}>${x.name}</option>`)}
+                                </optgroup>
                             </select>
                         </div>
                         <div class="toolbar">
