@@ -11,9 +11,21 @@ const {
     activateGroqApiKey,
     getPreferences,
     getAiProfile,
+    saveSession,
+    saveScreenshotAsset,
+    deleteScreenshotAsset,
 } = require('../storage');
 const { connectCloud, sendCloudAudio, sendCloudText, sendCloudImage, closeCloud, isCloudActive, setOnTurnComplete } = require('./cloud');
-const { GROQ_VISION_MODEL, buildVisionPrompt, buildVisionSystemPrompt } = require('./vision');
+const {
+    GROQ_VISION_MODEL,
+    VISION_EXTRACTION_SYSTEM_PROMPT,
+    buildVisionPrompt,
+    buildVisionExtractionPrompt,
+    parseVisionExtraction,
+    buildVisionSystemPrompt,
+    buildVisionAnswerSystemPrompt,
+    buildVisionAnswerTurn,
+} = require('./vision');
 const { getLanguageConfig } = require('./aiProfiles');
 const { createSpeechSegmenter, createManualAudioChunker, joinTranscriptParts, encodePcm16Wav } = require('./audioPipeline');
 const { createResponseId, createResponsePayload, createResponseUpdate } = require('./responsePayload');
@@ -208,31 +220,37 @@ function saveConversationTurn(transcription, aiResponse, metadata = {}) {
     });
 }
 
-function saveScreenAnalysis(prompt, response, model, provider = 'unknown') {
+function saveScreenAnalysis(prompt, response, model, provider = 'unknown', metadata = {}) {
     if (!currentSessionId) {
         initializeNewSession();
     }
 
+    const timestamp = Date.now();
+    const imageRef = metadata.screenshotBuffer ? saveScreenshotAsset(currentSessionId, timestamp, metadata.screenshotBuffer) : null;
     const analysisEntry = {
-        timestamp: Date.now(),
+        timestamp,
         prompt: prompt,
         response: response.trim(),
         model,
         provider,
-        pipeline: 'direct',
+        pipeline: metadata.pipeline || 'direct',
+        ...(imageRef ? { imageRef, imageBytes: metadata.screenshotBuffer.length } : {}),
+        ...(metadata.visionModel ? { visionModel: metadata.visionModel } : {}),
+        ...(metadata.responseModel ? { responseModel: metadata.responseModel } : {}),
     };
 
     screenAnalysisHistory.push(analysisEntry);
-    console.log('[Vision history]', { provider, model, pipeline: 'direct' });
-
-    // Send to renderer to save
-    sendToRenderer('save-screen-analysis', {
-        sessionId: currentSessionId,
-        analysis: analysisEntry,
-        fullHistory: screenAnalysisHistory,
+    console.log('[Vision history]', { provider, model, pipeline: analysisEntry.pipeline });
+    const saved = saveSession(currentSessionId, {
+        screenAnalysisHistory,
         profile: currentProfile,
         customPrompt: currentCustomPrompt,
     });
+    if (!saved) {
+        screenAnalysisHistory.pop();
+        if (imageRef) deleteScreenshotAsset(imageRef);
+        console.error('Could not save screen analysis history');
+    }
 }
 
 function getCurrentSessionData() {
@@ -343,15 +361,19 @@ function readGroqError(errorText) {
     }
 }
 
-function queueGroqText(text, requestContext = getHostedRequestContext()) {
+function queueGroqTextRequest(text, requestContext, options = {}) {
     if (!requestContext) return Promise.resolve(false);
-    const queued = groqTextQueue.then(() => sendToGroq(text, requestContext));
+    const queued = groqTextQueue.then(() => sendToGroq(text, requestContext, options));
     groqTextQueue = queued.catch(error => {
         console.error('[Groq text queue]', error.message);
         if (isHostedRequestActive(requestContext)) sendToRenderer('update-status', `Groq request failed: ${error.message}`);
         return false;
     });
     return queued;
+}
+
+function queueGroqText(text, requestContext = getHostedRequestContext()) {
+    return queueGroqTextRequest(text, requestContext);
 }
 
 async function transcribeGroqAudio(wavBuffer, language, requestContext) {
@@ -603,9 +625,17 @@ function processIncomingAudioContent(source, data, mimeType) {
     return processIncomingPcmBuffer(source, Buffer.from(data, 'base64'));
 }
 
-async function sendToGroq(transcription, requestContext = getHostedRequestContext()) {
+async function sendToGroq(transcription, requestContext = getHostedRequestContext(), options = {}) {
     if (!isHostedRequestActive(requestContext)) return false;
     const requestReceivedAt = Date.now();
+    const requestHistory = Array.isArray(options.history) ? options.history : groqConversationHistory;
+    const selectedModel = options.model || currentGroqSession?.model;
+    const systemPrompt = options.systemPrompt || currentGroqSession?.systemPrompt || currentSystemPrompt;
+    const behavior = options.behavior || currentGroqSession?.behavior;
+    const persistConversation = options.persistConversation !== false;
+    const returnDetails = options.returnDetails === true;
+    const responseSourceText = options.responseSourceText ?? transcription;
+    const metricStage = options.stage || 'text';
     const groqApiKeys = getGroqApiKeySequence();
     if (!groqApiKeys.length) {
         console.warn('A Groq API key is required for the selected hosted text model');
@@ -621,34 +651,29 @@ async function sendToGroq(transcription, requestContext = getHostedRequestContex
     const responseId = createResponseId();
     const keyActivationRequest = groqKeyActivation.begin(() => isHostedRequestActive(requestContext));
 
-    const models = getGroqFallbackOrder(currentGroqSession?.model);
+    const models = getGroqFallbackOrder(selectedModel);
 
     const userTurn = {
         role: 'user',
         content: transcription.trim(),
     };
-    groqConversationHistory.push(userTurn);
+    requestHistory.push(userTurn);
 
     const removeUserTurn = () => {
-        const index = groqConversationHistory.lastIndexOf(userTurn);
-        if (index !== -1) groqConversationHistory.splice(index, 1);
+        const index = requestHistory.lastIndexOf(userTurn);
+        if (index !== -1) requestHistory.splice(index, 1);
     };
 
-    const requestPlan = buildGroqRequestPlan(
-        currentGroqSession?.systemPrompt || currentSystemPrompt,
-        groqConversationHistory,
-        currentGroqSession?.behavior,
-        currentGroqSession?.tpmLimit
-    );
+    const requestPlan = buildGroqRequestPlan(systemPrompt, requestHistory, behavior, currentGroqSession?.tpmLimit);
     const metricBase = {
         requestId: responseId,
-        stage: 'text',
-        selectedModel: currentGroqSession?.model,
+        stage: metricStage,
+        selectedModel,
         estimatedInputTokens: requestPlan.inputTokens,
         includedPairs: requestPlan.messages ? Math.max(0, (requestPlan.messages.length - 2) / 2) : 0,
         trimmedMessages: requestPlan.trimmedMessages || 0,
         plannedCompletionTokens: requestPlan.maxCompletionTokens,
-        reasoningMode: currentGroqSession?.model?.startsWith('openai/gpt-oss-') ? 'low' : null,
+        reasoningMode: selectedModel?.startsWith('openai/gpt-oss-') ? options.reasoningEffort || 'low' : null,
     };
     const recordAttempt = (actualModel, keySlot, status, details = {}) =>
         recordGroqMetric({ ...metricBase, actualModel, keySlot, status, ...details });
@@ -682,6 +707,7 @@ async function sendToGroq(transcription, requestContext = getHostedRequestContex
                     messages: requestPlan.messages,
                     stream: true,
                     ...getGroqTextRequestOptions(model, requestPlan.maxCompletionTokens),
+                    ...(options.reasoningEffort && model.startsWith('openai/gpt-oss-') ? { reasoning_effort: options.reasoningEffort } : {}),
                 }),
                 signal: requestContext.signal,
             });
@@ -824,7 +850,7 @@ async function sendToGroq(transcription, requestContext = getHostedRequestContex
             if (displayText && (isFirst || now - lastRenderAt >= 40)) {
                 sendToRenderer(
                     isFirst ? 'new-response' : 'update-response',
-                    isFirst ? createResponsePayload(displayText, transcription, responseId) : createResponseUpdate(displayText, responseId)
+                    isFirst ? createResponsePayload(displayText, responseSourceText, responseId) : createResponseUpdate(displayText, responseId)
                 );
                 isFirst = false;
                 lastRenderAt = now;
@@ -849,12 +875,12 @@ async function sendToGroq(transcription, requestContext = getHostedRequestContex
             const partialResponse = stripThinkingTags(fullText).trim();
             if (partialResponse) {
                 const markedResponse = markIncompleteResponse(partialResponse, 'stream-error');
-                groqConversationHistory.push({ role: 'assistant', content: markedResponse });
-                saveConversationTurn(transcription, partialResponse, { status: 'incomplete', reason: 'stream-error' });
+                requestHistory.push({ role: 'assistant', content: markedResponse });
+                if (persistConversation) saveConversationTurn(transcription, partialResponse, { status: 'incomplete', reason: 'stream-error' });
                 sendToRenderer(
                     isFirst ? 'new-response' : 'update-response',
                     isFirst
-                        ? createResponsePayload(`${partialResponse}\n\n_Response interrupted before completion._`, transcription, responseId)
+                        ? createResponsePayload(`${partialResponse}\n\n_Response interrupted before completion._`, responseSourceText, responseId)
                         : createResponseUpdate(`${partialResponse}\n\n_Response interrupted before completion._`, responseId)
                 );
             } else {
@@ -895,7 +921,7 @@ async function sendToGroq(transcription, requestContext = getHostedRequestContex
         if (cleanedResponse !== lastRenderedText)
             sendToRenderer(
                 isFirst ? 'new-response' : 'update-response',
-                isFirst ? createResponsePayload(cleanedResponse, transcription, responseId) : createResponseUpdate(cleanedResponse, responseId)
+                isFirst ? createResponsePayload(cleanedResponse, responseSourceText, responseId) : createResponseUpdate(cleanedResponse, responseId)
             );
         const streamDoneAt = Date.now();
         const timings = {
@@ -915,21 +941,21 @@ async function sendToGroq(transcription, requestContext = getHostedRequestContex
         });
 
         if (finishReason === 'length') {
-            groqConversationHistory.push({ role: 'assistant', content: markIncompleteResponse(cleanedResponse, 'length') });
-            saveConversationTurn(transcription, cleanedResponse, { status: 'incomplete', reason: 'length' });
+            requestHistory.push({ role: 'assistant', content: markIncompleteResponse(cleanedResponse, 'length') });
+            if (persistConversation) saveConversationTurn(transcription, cleanedResponse, { status: 'incomplete', reason: 'length' });
             sendToRenderer(
                 'update-response',
                 createResponseUpdate(`${cleanedResponse}\n\n_Response stopped because the token limit was reached._`, responseId)
             );
             sendToRenderer('update-status', 'Groq response stopped at the token limit');
-            return true;
+            return returnDetails ? { success: true, text: cleanedResponse, model, status: 'incomplete' } : true;
         }
 
-        groqConversationHistory.push({ role: 'assistant', content: cleanedResponse });
-        saveConversationTurn(transcription, cleanedResponse);
+        requestHistory.push({ role: 'assistant', content: cleanedResponse });
+        if (persistConversation) saveConversationTurn(transcription, cleanedResponse);
         console.log(`Groq response completed (${model})`);
         sendToRenderer('update-status', 'Listening...');
-        return true;
+        return returnDetails ? { success: true, text: cleanedResponse, model, status: 'complete' } : true;
     }
 
     removeUserTurn();
@@ -944,7 +970,7 @@ async function sendGroqImage(base64Data, prompt, requestContext = getHostedReque
     const recordMetric = (keySlot, status, details = {}) =>
         recordGroqMetric({
             requestId,
-            stage: 'vision',
+            stage: 'vision-extraction',
             selectedModel: GROQ_VISION_MODEL,
             actualModel: GROQ_VISION_MODEL,
             keySlot,
@@ -967,7 +993,7 @@ async function sendGroqImage(base64Data, prompt, requestContext = getHostedReque
                 body: JSON.stringify({
                     model: GROQ_VISION_MODEL,
                     messages: [
-                        { role: 'system', content: buildVisionSystemPrompt(currentSystemPrompt) },
+                        { role: 'system', content: VISION_EXTRACTION_SYSTEM_PROMPT },
                         {
                             role: 'user',
                             content: [
@@ -977,6 +1003,7 @@ async function sendGroqImage(base64Data, prompt, requestContext = getHostedReque
                         },
                     ],
                     ...getGroqVisionRequestOptions(),
+                    response_format: { type: 'json_object' },
                 }),
                 signal: requestContext.signal,
             });
@@ -996,7 +1023,14 @@ async function sendGroqImage(base64Data, prompt, requestContext = getHostedReque
             const text = body.choices?.[0]?.message?.content?.trim();
             if (!text) {
                 recordMetric(keyIndex + 1, 'empty-response', { rateLimits });
-                return { success: false, error: 'Groq Vision returned an empty response' };
+                return { success: false, error: 'Groq Vision extraction returned an empty response' };
+            }
+            let extraction;
+            try {
+                extraction = parseVisionExtraction(text);
+            } catch (error) {
+                recordMetric(keyIndex + 1, 'invalid-extraction', { rateLimits, usage: body.usage || null });
+                return { success: false, error: error.message };
             }
             groqKeyActivation.activate(groqApiKeys[keyIndex], keyActivationRequest);
             recordMetric(keyIndex + 1, 'success', {
@@ -1004,8 +1038,7 @@ async function sendGroqImage(base64Data, prompt, requestContext = getHostedReque
                 rateLimits,
                 usage: body.usage || null,
             });
-            sendToRenderer('new-response', createResponsePayload(text));
-            return { success: true, text, model: GROQ_VISION_MODEL };
+            return { success: true, extraction, text: JSON.stringify(extraction), model: GROQ_VISION_MODEL };
         }
 
         const error = readGroqError(await response.text().catch(() => ''));
@@ -1637,15 +1670,65 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
             const prefs = getPreferences();
             if (prefs.visionProvider === 'disabled') return { success: false, error: 'Screenshot analysis is disabled in Settings' };
 
-            const visionPrompt = buildVisionPrompt(prefs.screenAnalysisPrompt, prompt, conversationHistory, prefs.visionIncludeConversation);
-
             process.stdout.write('!');
             isVisionRequestActive = true;
             ownsVisionLock = true;
             let result;
+            let historyPrompt;
             if (prefs.visionProvider === 'groq') {
-                result = await sendGroqImage(data, visionPrompt);
+                const requestContext = getHostedRequestContext();
+                if (!currentSystemPrompt || !requestContext) {
+                    return { success: false, error: 'Start an assistant session before using Quality screenshot analysis' };
+                }
+                const extractionPrompt = buildVisionExtractionPrompt(prefs.screenAnalysisPrompt, prompt);
+                historyPrompt = extractionPrompt;
+                sendToRenderer('update-status', 'Reading screen...');
+                const extractionResult = await sendGroqImage(data, extractionPrompt, requestContext);
+                if (!extractionResult.success) return extractionResult;
+                if (!isHostedRequestActive(requestContext)) return { success: false, aborted: true };
+
+                sendToRenderer('update-status', 'Generating answer...');
+                const answerTurn = buildVisionAnswerTurn(extractionResult.extraction, prompt);
+                const screenshotTextHistory = prefs.visionIncludeConversation
+                    ? conversationHistory
+                          .filter(turn => turn?.transcription?.trim() && turn?.ai_response?.trim())
+                          .slice(-2)
+                          .flatMap(turn => [
+                              { role: 'user', content: turn.transcription.trim() },
+                              { role: 'assistant', content: turn.ai_response.trim() },
+                          ])
+                    : [];
+                const answerResult = await queueGroqTextRequest(answerTurn, requestContext, {
+                    systemPrompt: buildVisionAnswerSystemPrompt(currentGroqSession?.systemPrompt || currentSystemPrompt),
+                    history: screenshotTextHistory,
+                    behavior: {
+                        conversationContextEnabled: prefs.visionIncludeConversation,
+                        conversationContextCount: prefs.visionIncludeConversation ? 2 : 0,
+                    },
+                    model: currentGroqSession?.model || prefs.hostedTextModel,
+                    persistConversation: false,
+                    returnDetails: true,
+                    responseSourceText: '',
+                    stage: 'vision-response',
+                    reasoningEffort: 'medium',
+                });
+                if (!answerResult?.success) {
+                    return {
+                        success: false,
+                        aborted: !isHostedRequestActive(requestContext),
+                        error: 'The screen was read, but the final text response failed',
+                    };
+                }
+                result = {
+                    success: true,
+                    text: answerResult.text,
+                    model: answerResult.model,
+                    visionModel: extractionResult.model,
+                    pipeline: 'extract-then-response',
+                };
             } else if (prefs.visionProvider === 'ollama') {
+                const visionPrompt = buildVisionPrompt(prefs.screenAnalysisPrompt, prompt, conversationHistory, prefs.visionIncludeConversation);
+                historyPrompt = visionPrompt;
                 result = await getLocalAi().sendLocalImage(data, visionPrompt, {
                     host: prefs.ollamaHost,
                     model: prefs.ollamaVisionModel,
@@ -1655,7 +1738,14 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
                 return { success: false, error: `Unsupported Vision provider: ${prefs.visionProvider}` };
             }
 
-            if (result.success) saveScreenAnalysis(visionPrompt, result.text, result.model, prefs.visionProvider);
+            if (result.success) {
+                saveScreenAnalysis(historyPrompt, result.text, result.model, prefs.visionProvider, {
+                    pipeline: result.pipeline || 'direct',
+                    visionModel: result.visionModel,
+                    responseModel: result.pipeline === 'extract-then-response' ? result.model : undefined,
+                    screenshotBuffer: prefs.saveScreenshotsInHistory ? buffer : null,
+                });
+            }
             return result;
         } catch (error) {
             console.error('Error sending image:', error);

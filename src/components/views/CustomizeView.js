@@ -2,7 +2,7 @@ import { html, css, LitElement } from '../../assets/lit-core-2.7.4.min.js';
 import { unifiedPageStyles } from './sharedPageStyles.js';
 
 const DEFAULT_SCREEN_ANALYSIS_PROMPT =
-    'Identify the single main visible question, task, code issue, or error in the central content and respond to it directly. Use only visible requirements. If the intent is unclear or essential content is cropped, say what is missing instead of guessing.';
+    'Focus on the single main visible question, task, code issue, or error in the central content. Use only visible requirements. If the intent is unclear or essential content is cropped, mark what is missing instead of guessing.';
 
 export class CustomizeView extends LitElement {
     static styles = [
@@ -342,6 +342,7 @@ export class CustomizeView extends LitElement {
         ollamaVisionModel: { type: String },
         screenAnalysisPrompt: { type: String },
         visionIncludeConversation: { type: Boolean },
+        saveScreenshotsInHistory: { type: Boolean },
         localVisionModels: { type: Array },
         localVisionStatus: { type: String },
         audioMode: { type: String },
@@ -380,6 +381,7 @@ export class CustomizeView extends LitElement {
         this.ollamaVisionModel = 'qwen3-vl:4b';
         this.screenAnalysisPrompt = '';
         this.visionIncludeConversation = true;
+        this.saveScreenshotsInHistory = false;
         this.localVisionModels = [];
         this.localVisionStatus = '';
         this._loadFromStorage();
@@ -406,6 +408,7 @@ export class CustomizeView extends LitElement {
             this.ollamaVisionModel = prefs.ollamaVisionModel ?? 'qwen3-vl:4b';
             this.screenAnalysisPrompt = prefs.screenAnalysisPrompt ?? '';
             this.visionIncludeConversation = prefs.visionIncludeConversation !== false;
+            this.saveScreenshotsInHistory = prefs.saveScreenshotsInHistory === true;
             if (this.visionProvider === 'ollama') await this.refreshLocalVisionModels();
             if (keybinds) {
                 this.keybinds = { ...this.getDefaultKeybinds(), ...keybinds };
@@ -627,6 +630,11 @@ export class CustomizeView extends LitElement {
         await cheatingDaddy.storage.updatePreference('visionIncludeConversation', this.visionIncludeConversation);
     }
 
+    async handleScreenshotHistoryChange(e) {
+        this.saveScreenshotsInHistory = e.target.checked;
+        await cheatingDaddy.storage.updatePreference('saveScreenshotsInHistory', this.saveScreenshotsInHistory);
+    }
+
     async refreshLocalVisionModels() {
         this.localVisionStatus = 'Checking Ollama...';
         this.requestUpdate();
@@ -802,6 +810,7 @@ export class CustomizeView extends LitElement {
                 ollamaVisionModel: 'qwen3-vl:4b',
                 screenAnalysisPrompt: DEFAULT_SCREEN_ANALYSIS_PROMPT,
                 visionIncludeConversation: true,
+                saveScreenshotsInHistory: false,
             };
             for (const [key, value] of Object.entries(defaults)) {
                 await cheatingDaddy.storage.updatePreference(key, value);
@@ -832,6 +841,7 @@ export class CustomizeView extends LitElement {
             this.ollamaVisionModel = defaults.ollamaVisionModel;
             this.screenAnalysisPrompt = defaults.screenAnalysisPrompt;
             this.visionIncludeConversation = defaults.visionIncludeConversation;
+            this.saveScreenshotsInHistory = defaults.saveScreenshotsInHistory;
 
             // Notify parent callbacks
             this.onProfileChange(defaults.selectedProfile);
@@ -940,7 +950,9 @@ export class CustomizeView extends LitElement {
             <section class="surface">
                 <div class="section-header">
                     <div class="surface-title">AI Models</div>
-                    <div class="surface-subtitle">Select the hosted model used to generate answers from typed questions and transcripts.</div>
+                    <div class="surface-subtitle">
+                        Select the hosted model used for typed questions, transcripts, and the final answer after Groq reads a screenshot.
+                    </div>
                 </div>
                 <div class="form-grid">
                     <div class="form-group">
@@ -950,7 +962,9 @@ export class CustomizeView extends LitElement {
                             <option value="openai/gpt-oss-20b">GPT-OSS 20B — Faster</option>
                             <option value="qwen/qwen3.6-27b">Qwen 3.6 27B — Preview (explicit only)</option>
                         </select>
-                        <div class="form-hint">Used only to generate text answers from transcripts and typed questions.</div>
+                        <div class="form-hint">
+                            For Groq screenshots, Qwen reads the screen first and this model generates the checked final answer.
+                        </div>
                     </div>
                 </div>
             </section>
@@ -980,7 +994,10 @@ export class CustomizeView extends LitElement {
                                   <select class="control" disabled>
                                       <option>Qwen 3.6 27B (Preview)</option>
                                   </select>
-                                  <div class="form-hint">Uses the active Groq key pool. Screenshots are sent to Groq.</div>
+                                  <div class="form-hint">
+                                      Quality pipeline: Qwen extracts visible evidence, then the selected Text Response Model answers. Uses two Groq
+                                      requests.
+                                  </div>
                               </div>`
                             : ''
                     }
@@ -996,7 +1013,7 @@ export class CustomizeView extends LitElement {
                                   >
                                       ${this.localVisionModels.map(model => html`<option value=${model}>${model}</option>`)}
                                   </select>
-                                  <div class="field-help">${this.localVisionStatus}</div>
+                                  <div class="field-help">${this.localVisionStatus} Screenshots and answers stay local in one direct request.</div>
                                   <div class="field-actions">
                                       <button class="secondary-button" @click=${this.refreshLocalVisionModels}>Refresh Ollama models</button>
                                   </div>
@@ -1017,6 +1034,15 @@ export class CustomizeView extends LitElement {
                                       <input type="checkbox" .checked=${this.visionIncludeConversation} @change=${this.handleVisionContextChange} />
                                       Include the last two conversation turns
                                   </label>
+                                  <label class="check-row">
+                                      <input
+                                          type="checkbox"
+                                          .checked=${this.saveScreenshotsInHistory}
+                                          @change=${this.handleScreenshotHistoryChange}
+                                      />
+                                      Save analyzed screenshots in local History
+                                  </label>
+                                  <div class="field-help">Off by default. Saved images are deleted with their History session.</div>
                                   <div class="field-actions">
                                       <button class="secondary-button" @click=${this.resetScreenAnalysisPrompt}>Reset instruction</button>
                                   </div>
@@ -1050,7 +1076,9 @@ export class CustomizeView extends LitElement {
                         <select id="speech-language" class="control" @change=${this.handleLanguageSelect}>
                             ${this.getLanguages().map(
                                 language =>
-                                    html`<option value=${language.value} ?selected=${this.selectedLanguage === language.value}>${language.name}</option>`
+                                    html`<option value=${language.value} ?selected=${this.selectedLanguage === language.value}>
+                                        ${language.name}
+                                    </option>`
                             )}
                         </select>
                     </div>

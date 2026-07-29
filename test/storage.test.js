@@ -2,7 +2,11 @@ const assert = require('assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { LEGACY_DEFAULT_SCREEN_ANALYSIS_PROMPT, DEFAULT_SCREEN_ANALYSIS_PROMPT } = require('../src/utils/vision');
+const {
+    LEGACY_DEFAULT_SCREEN_ANALYSIS_PROMPT,
+    PREVIOUS_DEFAULT_SCREEN_ANALYSIS_PROMPT,
+    DEFAULT_SCREEN_ANALYSIS_PROMPT,
+} = require('../src/utils/vision');
 
 const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'cheating-helper-storage-'));
 process.env.USERPROFILE = tempHome;
@@ -52,11 +56,24 @@ fs.writeFileSync(
                     format: 'teleprompter',
                 },
             },
+            {
+                id: 'profile_epam_hr_call-2',
+                name: 'EPAM HR Call',
+                prompt: {
+                    userContext: 'refined facts',
+                    persona: 'refined persona',
+                    answerRules: 'refined rules',
+                    responseStyle: 'refined style',
+                    length: 'concise',
+                    format: 'teleprompter',
+                },
+            },
         ],
         migrations: {
             seniorJavaInterviewV2: { done: true, updated: true },
             seniorJavaInterviewV3: { done: true, updated: true },
             seniorJavaInterviewV4: { done: true, updated: true },
+            seniorJavaInterviewV5: { done: true, updated: true },
         },
     }),
     'utf8'
@@ -69,7 +86,9 @@ try {
     storage.initializeStorage();
     assert.strictEqual(storage.getConfig().preserved, true);
     assert.strictEqual(storage.getConfig().configVersion, 1);
-    assert.ok(storage.getAiProfile('profile_epam_hr_call').prompt.answerRules.includes('Why are you changing jobs?'));
+    assert.strictEqual(storage.listAiProfiles().some(profile => profile.id === 'profile_epam_hr_call'), false);
+    assert.strictEqual(storage.getAiProfile('profile_epam_hr_call-2').prompt.userContext, 'refined facts');
+    assert.deepStrictEqual(storage.getProfileStore().migrations.epamHrDuplicateCleanupV1, { done: true, removed: true });
     const seniorJavaInterview = storage.getAiProfile('profile_senior_java_interview');
     assert.strictEqual(seniorJavaInterview.prompt.userContext, 'java facts');
     assert.strictEqual(seniorJavaInterview.prompt.length, 'concise');
@@ -78,11 +97,15 @@ try {
     assert.ok(seniorJavaInterview.prompt.answerRules.includes('Explain this at Senior Java interview level'));
     assert.ok(seniorJavaInterview.prompt.answerRules.includes('Never invent speculative consequences'));
     assert.ok(seniorJavaInterview.prompt.answerRules.includes('do not stop at a definition'));
+    assert.ok(seniorJavaInterview.prompt.answerRules.includes('do not silently ignore failures'));
+    assert.ok(seniorJavaInterview.prompt.answerRules.includes('Do not add handling unrelated to the visible task'));
+    assert.doesNotMatch(seniorJavaInterview.prompt.answerRules, /InterruptedException|wait\/notify|Ping|Pong/);
     assert.deepStrictEqual(seniorJavaInterview.behavior, { conversationContextEnabled: false, conversationContextCount: 4 });
     assert.deepStrictEqual(storage.getProfileStore().migrations.seniorJavaInterviewV2, { done: true, updated: true });
     assert.deepStrictEqual(storage.getProfileStore().migrations.seniorJavaInterviewV3, { done: true, updated: true });
     assert.deepStrictEqual(storage.getProfileStore().migrations.seniorJavaInterviewV4, { done: true, updated: true });
     assert.deepStrictEqual(storage.getProfileStore().migrations.seniorJavaInterviewV5, { done: true, updated: true });
+    assert.deepStrictEqual(storage.getProfileStore().migrations.seniorJavaInterviewV6, { done: true, updated: true });
     assert.deepStrictEqual(storage.getGroqApiKeys(), ['legacy-key']);
     assert.strictEqual(storage.getCredentials().unrelated, 'preserved');
 
@@ -107,8 +130,12 @@ try {
     assert.strictEqual(defaults.groqVisionModel, 'qwen/qwen3.6-27b');
     assert.strictEqual(defaults.ollamaVisionModel, 'qwen3-vl:4b');
     assert.strictEqual(defaults.screenAnalysisPrompt, DEFAULT_SCREEN_ANALYSIS_PROMPT);
-    assert.strictEqual(JSON.parse(fs.readFileSync(path.join(configDir, 'preferences.json'), 'utf8')).screenAnalysisPrompt, DEFAULT_SCREEN_ANALYSIS_PROMPT);
+    assert.strictEqual(
+        JSON.parse(fs.readFileSync(path.join(configDir, 'preferences.json'), 'utf8')).screenAnalysisPrompt,
+        DEFAULT_SCREEN_ANALYSIS_PROMPT
+    );
     assert.strictEqual(defaults.visionIncludeConversation, true);
+    assert.strictEqual(defaults.saveScreenshotsInHistory, false);
     assert.ok(defaults.availableProfiles.some(profile => profile.id === 'profile_senior_java_interview'));
     assert.ok(defaults.availableProfiles.some(profile => profile.id === 'interview' && profile.isBuiltin));
     storage.updatePreference('visionProvider', 'invalid');
@@ -117,6 +144,9 @@ try {
     storage.updatePreference('ollamaVisionModel', 'custom-vl:latest');
     assert.strictEqual(storage.getPreferences().visionProvider, 'ollama');
     assert.strictEqual(storage.getPreferences().ollamaVisionModel, 'custom-vl:latest');
+    storage.updatePreference('screenAnalysisPrompt', PREVIOUS_DEFAULT_SCREEN_ANALYSIS_PROMPT);
+    storage.initializeStorage();
+    assert.strictEqual(storage.getPreferences().screenAnalysisPrompt, DEFAULT_SCREEN_ANALYSIS_PROMPT);
     storage.updatePreference('screenAnalysisPrompt', 'Keep this custom screenshot instruction exactly.');
     storage.initializeStorage();
     assert.strictEqual(storage.getPreferences().screenAnalysisPrompt, 'Keep this custom screenshot instruction exactly.');
@@ -166,6 +196,16 @@ try {
     const sessionSummary = storage.getAllSessions().find(session => session.sessionId === '1234567890');
     assert.strictEqual(sessionSummary.profileName, 'Senior Java Interview');
     assert.strictEqual(sessionSummary.language, 'en-US');
+
+    const imageRef = storage.saveScreenshotAsset('1234567890', 1234567892, Buffer.from('jpeg-data'));
+    storage.saveSession('1234567890', {
+        screenAnalysisHistory: [{ timestamp: 1234567892, response: 'Screen answer', imageRef }],
+    });
+    const sessionWithImage = storage.getSession('1234567890');
+    assert.strictEqual(sessionWithImage.screenAnalysisHistory[0].imageData, `data:image/jpeg;base64,${Buffer.from('jpeg-data').toString('base64')}`);
+    assert.throws(() => storage.saveScreenshotAsset('../escape', 1, Buffer.from('x')), /Invalid session ID/);
+    storage.deleteSession('1234567890');
+    assert.strictEqual(fs.existsSync(path.join(configDir, 'history', 'assets', '1234567890')), false);
 } finally {
     fs.rmSync(tempHome, { recursive: true, force: true });
 }

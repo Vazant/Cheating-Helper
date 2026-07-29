@@ -89,10 +89,15 @@ for (const instruction of [
     'cloud, microservices, testing, engineering methodologies and databases',
     'State time and space complexity',
     'clean, complete Java code',
+    'Use idiomatic error handling for the chosen language',
+    'do not silently ignore failures',
+    'verify its initial state, main execution path, termination behavior and relevant edge cases',
+    'Do not add handling unrelated to the visible task',
     'do not repeat or extend the previous answer',
     'use only facts from User Context',
 ])
     assert.ok(seniorJavaInterviewPrompt.includes(instruction));
+assert.doesNotMatch(seniorJavaInterviewPrompt, /InterruptedException|wait\/notify|Ping|Pong/);
 assert.ok(seniorJavaInterviewPrompt.includes('Always reply in English'));
 const seniorJavaInterviewRussianPrompt = compileProfile(SENIOR_JAVA_PROFILE, { language: 'ru-RU' });
 assert.ok(seniorJavaInterviewRussianPrompt.includes('Always reply in Russian'));
@@ -160,9 +165,14 @@ for (const visible of ['About you / Facts the assistant may use', 'Assistant rol
 assert.ok(uiSource.includes('flex-direction: column'));
 assert.ok(uiSource.includes('Profile for next session'));
 assert.ok(uiSource.includes('Changes apply after a new Start'));
+assert.ok(uiSource.includes("'response-style'"));
+assert.ok(uiSource.includes('duplicateNames.has(x.name)'));
 
 const historySource = fs.readFileSync(require.resolve('../src/components/views/HistoryView'), 'utf8');
 assert.ok(historySource.includes('if (session.profileName) return session.profileName'));
 assert.ok(historySource.includes("profile_senior_java_interview: 'Senior Java Interview'"));
+assert.ok(historySource.includes('.message *'));
+assert.ok(historySource.includes('navigator.clipboard.writeText(text)'));
+assert.ok(historySource.includes('entry.imageData'));
 
 console.log('AI profile schema, import and compiler: OK');

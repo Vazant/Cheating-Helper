@@ -130,13 +130,13 @@
 
 ### Capability-to-model matrix
 
-| Роль | Текущий runtime | Решение этой регрессии |
-|---|---|---|
-| Hosted Vision | Groq `qwen/qwen3.6-27b` | Model ID и direct routing не менять |
-| Local Vision | Ollama vision-capable model | Применить ту же Vision grounding policy |
-| Hosted Text | GPT-OSS 120B/20B | Не участвует в screenshot request |
-| Active AI Profile | Senior Java Interview | Использовать только в явно подтверждённой роли; не позволять общим profile rules расширять невидимые требования |
-| Speech-to-Text / Live Audio | отдельные pipelines | Не менять |
+| Роль                        | Текущий runtime             | Решение этой регрессии                                                                                          |
+| --------------------------- | --------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| Hosted Vision               | Groq `qwen/qwen3.6-27b`     | Model ID и direct routing не менять                                                                             |
+| Local Vision                | Ollama vision-capable model | Применить ту же Vision grounding policy                                                                         |
+| Hosted Text                 | GPT-OSS 120B/20B            | Не участвует в screenshot request                                                                               |
+| Active AI Profile           | Senior Java Interview       | Использовать только в явно подтверждённой роли; не позволять общим profile rules расширять невидимые требования |
+| Speech-to-Text / Live Audio | отдельные pipelines         | Не менять                                                                                                       |
 
 ### Рекомендуемое поведение
 
@@ -253,6 +253,79 @@ OCR основной задачи сработал; ошибка находит�
 ### Новый открытый вопрос
 
 Подтвердить следующий этап: ограничиться минимальной prompt-доработкой в direct pipeline либо добавить явный режим `Quality: Vision extraction → Text LLM`.
+
+## Подтверждённый Quality pipeline — 2026-07-27
+
+Пользователь подтвердил замену текущего hosted direct-ответа на двухэтапную обработку и потребовал сначала отправить контрольную точку в GitHub. Контрольный commit `47b7243` (`checkpoint: improve prompts and vision grounding`) успешно отправлен в `origin/codex/groq-quality-context`.
+
+### Проверенная модельная схема
+
+| Этап                  | Модель/провайдер                                                            | Вход                                             | Выход                                  |
+| --------------------- | --------------------------------------------------------------------------- | ------------------------------------------------ | -------------------------------------- |
+| Hosted extraction     | Groq `qwen/qwen3.6-27b`                                                     | JPEG + extraction instruction                    | Только структурированные видимые факты |
+| Hosted final response | Замороженная text model активной Groq-сессии; default `openai/gpt-oss-120b` | Валидированное text extraction + profile/context | Финальный ответ пользователю           |
+| Local screenshot      | Выбранная Ollama vision-capable model                                       | JPEG + direct grounding prompt                   | Полностью локальный direct-ответ       |
+
+Официальная Groq документация на 2026-07-27 подтверждает image/text input и JSON mode для Qwen 3.6, а GPT-OSS 120B принимает только text input и поддерживает reasoning. Raw image во второй этап не передаётся.
+
+### Подтверждённый минимальный scope
+
+- Новый preference/toggle не добавлять: hosted Groq screenshot всегда использует `extract-then-response`.
+- Второй этап использует `currentGroqSession.model`, профиль, язык, behavior, text history budget, key rotation и same-family 404 fallback активной сессии.
+- Extraction не получает Senior Java profile, User Context, выбранный язык или conversation history и не показывается в UI.
+- Один hosted request context и один vision lock охватывают оба этапа; ошибка/abort/empty/invalid extraction останавливает цепочку.
+- Сохранять только итоговый screenshot-ответ и metadata `pipeline`, `visionModel`, `responseModel`; raw extraction не сохранять.
+- Screenshot-ответ, как и раньше, не добавлять молча в обычную text/audio conversation history.
+- `Ollama — Local/private` пока остаётся direct/local. Скрытая передача extracted screen text в Groq запрещена; local two-stage или mixed provider потребуют отдельного явного решения.
+- UI явно сообщает, что Groq screenshot использует два запроса и выбранную Text Response Model; ложное `Text model used only for typed/transcripts` удалить.
+
+### Extraction contract
+
+Stage 1 возвращает один ограниченный JSON object с `status`, `primaryKind`, `primaryText`, `visibleRequirements`, `requestedMechanisms`, `visibleCode`, `visibleErrors`, `visibleExamples` и `missingOrUnreadable`. Он не отвечает, не решает, не объясняет и не критикует задачу. Invalid enum/shape/oversize/empty critical evidence останавливают pipeline без повторного запроса и без старых данных.
+
+### Final-answer safeguards
+
+- Профиль задаёт язык, уровень, стиль и формат, но не доказывает, что экран относится к интервью, тесту, вакансии или компании.
+- Предпочитать явно видимый requested mechanism.
+- Не добавлять невидимые input/constraints/code/errors/operations/expected output.
+- Перед возвратом кода сверить каждое видимое требование и мысленно пройти начальное состояние.
+- Не раскрывать extraction process и не смешивать языки, кроме идентификаторов/цитат кода.
+
+### Подзадачи Quality pipeline
+
+1. `DONE` Создать и отправить контрольный commit перед изменением pipeline.
+2. `DONE` Проверить официальные capabilities Qwen Vision/JSON и GPT-OSS Text/Reasoning.
+3. `DONE` Провести read-only audits model architecture, prompt runtime и settings/storage.
+4. `DONE` Добавить extraction builders/parser и final evidence boundary.
+5. `DONE` Сделать Groq vision stage внутренним и передать валидированное extraction в существующий text runner.
+6. `DONE` Обновить screenshot history metadata и Settings descriptions; Ollama direct/private не менять.
+7. `DONE` Добавить unit/regression checks и пересобрать Windows package.
+8. `BLOCKED` Live A/B на Medium Ping/Pong и контрольных скриншотах требует отдельного разрешения на два Groq-запроса.
+
+### Фактический результат Quality pipeline
+
+- Hosted Groq screenshot теперь проходит через `qwen/qwen3.6-27b` extraction и выбранную Text Response Model; для текущей `openai/gpt-oss-120b` финальный этап использует `medium` reasoning.
+- Кнопка `Analyze Screen` и настраиваемая горячая клавиша используют один `captureManualScreenshot()` и один IPC/pipeline: новый снимок → extraction → финальный ответ.
+- Stage 1 возвращает JSON и не получает профиль, User Context, выбранный язык или историю. Stage 2 не получает изображение и строит ответ только по валидированным видимым данным.
+- Успешная запись History хранит итоговый ответ и metadata `pipeline`, `visionModel`, `responseModel`; сырой extraction не сохраняется.
+- Ollama сохранила прямой локальный pipeline без скрытой передачи данных в Groq.
+- Старый стандартный screen prompt автоматически заменён новым extraction-focused default; пользовательские prompt-значения не перезаписываются.
+- Все 18 автономных JavaScript test files прошли; `node --check`, Prettier check и `git diff --check` прошли.
+- `npm run package` прошёл; Windows x64 package пересобран.
+- Текущие локальные настройки проверены после миграции: `ru-RU`, Groq Vision, `openai/gpt-oss-120b`, screenshot conversation context включён.
+- Live Groq A/B не запускался: он расходует два API-запроса и остаётся отдельной разрешаемой проверкой.
+
+### Критерии приёмки Quality pipeline
+
+- Stage 1 payload содержит Qwen + image; Stage 2 содержит выбранную text model и не содержит image/base64.
+- Extraction stage не получает profile/User Context/language/history и не создаёт response card.
+- Invalid/empty extraction не запускает Stage 2.
+- Final stage использует frozen profile/language и существующий bounded text context, но не добавляет screenshot turn в обычную conversation history.
+- Один abort context предотвращает stale final answer после смены/закрытия сессии.
+- History успешного Groq screenshot содержит `pipeline: extract-then-response`, vision model и фактическую response model; extraction не сохраняется.
+- Ollama остаётся local/direct и не отправляет extracted content в Groq.
+- Ping/Pong regression не добавляет interview framing, сохраняет видимый `wait/notify` и проверяет, что первый фактический вывод — `Ping`.
+- Кнопка `Analyze Screen` и shortcut запускают один и тот же ручной screenshot flow.
 
 ## Официальные источники
 

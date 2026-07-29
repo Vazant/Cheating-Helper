@@ -6,6 +6,7 @@ const {
     GROQ_VISION_MODEL,
     DEFAULT_OLLAMA_VISION_MODEL,
     LEGACY_DEFAULT_SCREEN_ANALYSIS_PROMPT,
+    PREVIOUS_DEFAULT_SCREEN_ANALYSIS_PROMPT,
     DEFAULT_SCREEN_ANALYSIS_PROMPT,
     normalizeVisionProvider,
 } = require('./utils/vision');
@@ -113,6 +114,7 @@ const DEFAULT_PREFERENCES = {
     ollamaVisionModel: DEFAULT_OLLAMA_VISION_MODEL,
     screenAnalysisPrompt: DEFAULT_SCREEN_ANALYSIS_PROMPT,
     visionIncludeConversation: true,
+    saveScreenshotsInHistory: false,
     ollamaHost: 'http://127.0.0.1:11434',
     ollamaModel: 'llama3.1',
     whisperModel: 'Xenova/whisper-small',
@@ -124,10 +126,12 @@ const DEFAULT_PROFILE_STORE = {
     migrations: {
         customPromptV1: { done: false, profileId: null },
         epamHrProfileV2: { done: false, updated: false },
+        epamHrDuplicateCleanupV1: { done: false, removed: false },
         seniorJavaInterviewV2: { done: false, updated: false },
         seniorJavaInterviewV3: { done: false, updated: false },
         seniorJavaInterviewV4: { done: false, updated: false },
         seniorJavaInterviewV5: { done: false, updated: false },
+        seniorJavaInterviewV6: { done: false, updated: false },
     },
 };
 
@@ -288,10 +292,12 @@ function initializeStorage() {
     persistPreferences(getPreferences());
     migrateLegacyCustomPrompt();
     migrateEpamHrProfileV2();
+    migrateEpamHrDuplicateCleanupV1();
     migrateSeniorJavaInterviewV2();
     migrateSeniorJavaInterviewV3();
     migrateSeniorJavaInterviewV4();
     migrateSeniorJavaInterviewV5();
+    migrateSeniorJavaInterviewV6();
 }
 
 // ============ CONFIG ============
@@ -388,7 +394,7 @@ function getPreferences() {
                 : DEFAULT_OLLAMA_VISION_MODEL,
         screenAnalysisPrompt:
             typeof saved.screenAnalysisPrompt === 'string' && saved.screenAnalysisPrompt.trim()
-                ? saved.screenAnalysisPrompt === LEGACY_DEFAULT_SCREEN_ANALYSIS_PROMPT
+                ? [LEGACY_DEFAULT_SCREEN_ANALYSIS_PROMPT, PREVIOUS_DEFAULT_SCREEN_ANALYSIS_PROMPT].includes(saved.screenAnalysisPrompt)
                     ? DEFAULT_SCREEN_ANALYSIS_PROMPT
                     : saved.screenAnalysisPrompt
                 : DEFAULT_SCREEN_ANALYSIS_PROMPT,
@@ -460,6 +466,10 @@ function getProfileStore() {
                 done: saved.migrations?.epamHrProfileV2?.done === true,
                 updated: saved.migrations?.epamHrProfileV2?.updated === true,
             },
+            epamHrDuplicateCleanupV1: {
+                done: saved.migrations?.epamHrDuplicateCleanupV1?.done === true,
+                removed: saved.migrations?.epamHrDuplicateCleanupV1?.removed === true,
+            },
             seniorJavaInterviewV2: {
                 done: saved.migrations?.seniorJavaInterviewV2?.done === true,
                 updated: saved.migrations?.seniorJavaInterviewV2?.updated === true,
@@ -475,6 +485,10 @@ function getProfileStore() {
             seniorJavaInterviewV5: {
                 done: saved.migrations?.seniorJavaInterviewV5?.done === true,
                 updated: saved.migrations?.seniorJavaInterviewV5?.updated === true,
+            },
+            seniorJavaInterviewV6: {
+                done: saved.migrations?.seniorJavaInterviewV6?.done === true,
+                updated: saved.migrations?.seniorJavaInterviewV6?.updated === true,
             },
         },
     };
@@ -599,6 +613,16 @@ function migrateEpamHrProfileV2() {
     setProfileStore(store);
 }
 
+function migrateEpamHrDuplicateCleanupV1() {
+    const store = getProfileStore();
+    if (store.migrations.epamHrDuplicateCleanupV1.done) return;
+    const hasRefinedProfile = store.userProfiles.some(profile => profile.id === 'profile_epam_hr_call-2');
+    const before = store.userProfiles.length;
+    if (hasRefinedProfile) store.userProfiles = store.userProfiles.filter(profile => profile.id !== 'profile_epam_hr_call');
+    store.migrations.epamHrDuplicateCleanupV1 = { done: true, removed: store.userProfiles.length < before };
+    setProfileStore(store);
+}
+
 function migrateSeniorJavaInterviewV2() {
     const store = getProfileStore();
     if (store.migrations.seniorJavaInterviewV2.done) return;
@@ -672,6 +696,25 @@ function migrateSeniorJavaInterviewV5() {
         });
     }
     store.migrations.seniorJavaInterviewV5 = { done: true, updated: index >= 0 };
+    setProfileStore(store);
+}
+
+function migrateSeniorJavaInterviewV6() {
+    const store = getProfileStore();
+    if (store.migrations.seniorJavaInterviewV6.done) return;
+    const index = store.userProfiles.findIndex(profile => profile.id === SENIOR_JAVA_PROFILE.id);
+    if (index >= 0) {
+        const existing = store.userProfiles[index];
+        store.userProfiles[index] = normalizeProfile({
+            ...SENIOR_JAVA_PROFILE,
+            prompt: {
+                ...SENIOR_JAVA_PROFILE.prompt,
+                userContext: existing.prompt.userContext,
+            },
+            behavior: existing.behavior,
+        });
+    }
+    store.migrations.seniorJavaInterviewV6 = { done: true, updated: index >= 0 };
     setProfileStore(store);
 }
 
@@ -789,6 +832,53 @@ function getSessionPath(sessionId) {
     return path.join(getHistoryDir(), `${sessionId}.json`);
 }
 
+function getSessionAssetDir(sessionId) {
+    if (!/^\d+$/.test(String(sessionId))) throw new Error('Invalid session ID');
+    return path.join(getHistoryDir(), 'assets', String(sessionId));
+}
+
+function saveScreenshotAsset(sessionId, timestamp, buffer) {
+    if (!Buffer.isBuffer(buffer) || !buffer.length) throw new Error('Invalid screenshot data');
+    const assetDir = getSessionAssetDir(sessionId);
+    fs.mkdirSync(assetDir, { recursive: true });
+    const filename = `${Number(timestamp)}.jpg`;
+    const assetPath = path.join(assetDir, filename);
+    fs.writeFileSync(assetPath, buffer);
+    return path.relative(getHistoryDir(), assetPath).replaceAll(path.sep, '/');
+}
+
+function resolveScreenshotAsset(imageRef) {
+    if (typeof imageRef !== 'string' || path.isAbsolute(imageRef) || !imageRef.startsWith('assets/')) return null;
+    const historyRoot = path.resolve(getHistoryDir());
+    const assetPath = path.resolve(historyRoot, imageRef);
+    return assetPath.startsWith(`${historyRoot}${path.sep}`) ? assetPath : null;
+}
+
+function deleteScreenshotAsset(imageRef) {
+    const assetPath = resolveScreenshotAsset(imageRef);
+    if (!assetPath) return false;
+    try {
+        if (fs.existsSync(assetPath)) fs.unlinkSync(assetPath);
+        return true;
+    } catch (error) {
+        console.error('Error deleting screenshot asset:', error.message);
+        return false;
+    }
+}
+
+function hydrateScreenshotAssets(session) {
+    if (!session?.screenAnalysisHistory) return session;
+    return {
+        ...session,
+        screenAnalysisHistory: session.screenAnalysisHistory.map(entry => {
+            if (!entry.imageRef) return entry;
+            const assetPath = resolveScreenshotAsset(entry.imageRef);
+            if (!assetPath || !fs.existsSync(assetPath)) return entry;
+            return { ...entry, imageData: `data:image/jpeg;base64,${fs.readFileSync(assetPath).toString('base64')}` };
+        }),
+    };
+}
+
 function saveSession(sessionId, data) {
     const sessionPath = getSessionPath(sessionId);
 
@@ -812,7 +902,7 @@ function saveSession(sessionId, data) {
 }
 
 function getSession(sessionId) {
-    return readJsonFile(getSessionPath(sessionId), null);
+    return hydrateScreenshotAssets(readJsonFile(getSessionPath(sessionId), null));
 }
 
 function getAllSessions() {
@@ -864,8 +954,9 @@ function deleteSession(sessionId) {
     try {
         if (fs.existsSync(sessionPath)) {
             fs.unlinkSync(sessionPath);
-            return true;
         }
+        fs.rmSync(getSessionAssetDir(sessionId), { recursive: true, force: true });
+        return true;
     } catch (error) {
         console.error('Error deleting session:', error.message);
     }
@@ -880,6 +971,7 @@ function deleteAllSessions() {
             files.forEach(file => {
                 fs.unlinkSync(path.join(historyDir, file));
             });
+            fs.rmSync(path.join(historyDir, 'assets'), { recursive: true, force: true });
         }
         return true;
     } catch (error) {
@@ -949,6 +1041,8 @@ module.exports = {
 
     // History
     saveSession,
+    saveScreenshotAsset,
+    deleteScreenshotAsset,
     getSession,
     getAllSessions,
     deleteSession,

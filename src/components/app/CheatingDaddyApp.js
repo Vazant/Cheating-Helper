@@ -6,7 +6,6 @@ import { HistoryView } from '../views/HistoryView.js';
 import { AssistantView } from '../views/AssistantView.js';
 import { OnboardingView } from '../views/OnboardingView.js';
 import { AICustomizeView } from '../views/AICustomizeView.js';
-import { FeedbackView } from '../views/FeedbackView.js';
 
 export class CheatingDaddyApp extends LitElement {
     static styles = css`
@@ -178,57 +177,6 @@ export class CheatingDaddyApp extends LitElement {
             -webkit-app-region: no-drag;
         }
 
-        .update-btn {
-            display: flex;
-            align-items: center;
-            gap: var(--space-sm);
-            width: 100%;
-            padding: var(--space-sm) var(--space-md);
-            border-radius: var(--radius-md);
-            border: 1px solid rgba(239, 68, 68, 0.2);
-            background: rgba(239, 68, 68, 0.08);
-            color: var(--danger);
-            font-size: var(--font-size-sm);
-            font-weight: var(--font-weight-medium);
-            cursor: pointer;
-            text-align: left;
-            transition:
-                background var(--transition),
-                border-color var(--transition);
-            animation: update-wobble 5s ease-in-out infinite;
-        }
-
-        .update-btn:hover {
-            background: rgba(239, 68, 68, 0.14);
-            border-color: rgba(239, 68, 68, 0.35);
-        }
-
-        @keyframes update-wobble {
-            0%,
-            90%,
-            100% {
-                transform: rotate(0deg);
-            }
-            92% {
-                transform: rotate(-2deg);
-            }
-            94% {
-                transform: rotate(2deg);
-            }
-            96% {
-                transform: rotate(-1.5deg);
-            }
-            98% {
-                transform: rotate(1.5deg);
-            }
-        }
-
-        .update-btn svg {
-            width: 20px;
-            height: 20px;
-            flex-shrink: 0;
-        }
-
         .version-text {
             font-size: var(--font-size-xs);
             color: var(--text-muted);
@@ -381,6 +329,10 @@ export class CheatingDaddyApp extends LitElement {
         ::-webkit-scrollbar-thumb:hover {
             background: #444444;
         }
+
+        ::-webkit-scrollbar-button {
+            display: none;
+        }
     `;
 
     static properties = {
@@ -404,7 +356,6 @@ export class CheatingDaddyApp extends LitElement {
         shouldAnimateResponse: { type: Boolean },
         _storageLoaded: { state: true },
         _storageError: { state: true },
-        _updateAvailable: { state: true },
         _whisperDownloading: { state: true },
         _groqSessionPlan: { state: true },
         _groqMetric: { state: true },
@@ -434,37 +385,20 @@ export class CheatingDaddyApp extends LitElement {
         this._storageLoaded = false;
         this._storageError = '';
         this._timerInterval = null;
-        this._updateAvailable = false;
         this._whisperDownloading = false;
         this._groqSessionPlan = null;
         this._groqMetric = null;
         this._localVersion = '';
 
         this._loadFromStorage();
-        this._checkForUpdates();
+        this._loadVersion();
     }
 
-    async _checkForUpdates() {
+    async _loadVersion() {
         try {
             this._localVersion = await cheatingDaddy.getVersion();
             this.requestUpdate();
-
-            const res = await fetch('https://raw.githubusercontent.com/sohzm/cheating-daddy/refs/heads/master/package.json');
-            if (!res.ok) return;
-            const remote = await res.json();
-            const remoteVersion = remote.version;
-
-            const toNum = v => v.split('.').map(Number);
-            const [rMaj, rMin, rPatch] = toNum(remoteVersion);
-            const [lMaj, lMin, lPatch] = toNum(this._localVersion);
-
-            if (rMaj > lMaj || (rMaj === lMaj && rMin > lMin) || (rMaj === lMaj && rMin === lMin && rPatch > lPatch)) {
-                this._updateAvailable = true;
-                this.requestUpdate();
-            }
-        } catch (e) {
-            // silently ignore
-        }
+        } catch {}
     }
 
     async _loadFromStorage() {
@@ -721,13 +655,6 @@ export class CheatingDaddyApp extends LitElement {
         this._startTimer();
     }
 
-    async handleAPIKeyHelp() {
-        if (window.require) {
-            const { ipcRenderer } = window.require('electron');
-            await ipcRenderer.invoke('open-external', 'https://cheatingdaddy.com/help/api-key');
-        }
-    }
-
     async handleGroqAPIKeyHelp() {
         if (window.require) {
             const { ipcRenderer } = window.require('electron');
@@ -849,9 +776,6 @@ export class CheatingDaddyApp extends LitElement {
                     ></customize-view>
                 `;
 
-            case 'feedback':
-                return html`<feedback-view></feedback-view>`;
-
             case 'help':
                 return html`<help-view .onExternalLinkClick=${url => this.handleExternalLinkClick(url)}></help-view>`;
 
@@ -933,16 +857,6 @@ export class CheatingDaddyApp extends LitElement {
                 </svg>`,
             },
             {
-                id: 'feedback',
-                label: 'Feedback',
-                icon: html`<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24">
-                    <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2">
-                        <path d="M18 4a3 3 0 0 1 3 3v8a3 3 0 0 1-3 3h-5l-5 3v-3H6a3 3 0 0 1-3-3V7a3 3 0 0 1 3-3zM9.5 9h.01m4.99 0h.01" />
-                        <path d="M9.5 13a3.5 3.5 0 0 0 5 0" />
-                    </g>
-                </svg>`,
-            },
-            {
                 id: 'help',
                 label: 'Help',
                 icon: html`<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24">
@@ -973,25 +887,7 @@ export class CheatingDaddyApp extends LitElement {
                     )}
                 </nav>
                 <div class="sidebar-footer">
-                    ${
-                        this._updateAvailable
-                            ? html`
-                                  <button class="update-btn" @click=${() => this.handleExternalLinkClick('https://cheatingdaddy.com/download')}>
-                                      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
-                                          <path
-                                              fill="none"
-                                              stroke="currentColor"
-                                              stroke-linecap="round"
-                                              stroke-linejoin="round"
-                                              stroke-width="2"
-                                              d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2M7 11l5 5l5-5m-5-7v12"
-                                          />
-                                      </svg>
-                                      Update available
-                                  </button>
-                              `
-                            : html` <div class="version-text">v${this._localVersion}</div> `
-                    }
+                    <div class="version-text">v${this._localVersion}</div>
                 </div>
             </div>
         `;

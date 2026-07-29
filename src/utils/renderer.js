@@ -901,20 +901,6 @@ ipcRenderer.on('save-session-context', async (event, data) => {
     }
 });
 
-// Listen for screen analysis responses (from ctrl+enter)
-ipcRenderer.on('save-screen-analysis', async (event, data) => {
-    try {
-        await storage.saveSession(data.sessionId, {
-            screenAnalysisHistory: data.fullHistory,
-            profile: data.profile,
-            customPrompt: data.customPrompt,
-        });
-        console.log('Screen analysis saved:', data.sessionId);
-    } catch (error) {
-        console.error('Error saving screen analysis:', error);
-    }
-});
-
 // Handle shortcuts based on current view
 function handleShortcut(shortcutKey) {
     const currentView = cheatingDaddy.getCurrentView();

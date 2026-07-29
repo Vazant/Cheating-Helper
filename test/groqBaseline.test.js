@@ -158,7 +158,7 @@ test('compiled Groq profile baseline remains deterministic', () => {
         presentation: 1599,
         negotiation: 1644,
         exam: 1637,
-        profile_senior_java_interview: 7680,
+        profile_senior_java_interview: 7945,
     });
 
     assert.equal(

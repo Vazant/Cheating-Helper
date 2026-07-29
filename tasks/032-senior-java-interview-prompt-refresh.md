@@ -49,13 +49,13 @@
 
 Проверено по официальной документации Groq 2026-07-26. Model IDs и их роли в этой задаче не меняются.
 
-| Роль | Текущая модель/контур | Отношение к задаче |
-|---|---|---|
-| Hosted text generation | `openai/gpt-oss-120b` default, `openai/gpt-oss-20b` same-family fallback, `qwen/qwen3.6-27b` explicit Preview | Получает обновлённый system prompt |
-| Hosted vision | `qwen/qwen3.6-27b` | Не менять; после распознавания вопроса text response всё равно следует активному interview profile |
-| Speech-to-text | `whisper-large-v3-turbo` | Не менять; транскрипция становится текущим user message |
-| Live audio | capture/VAD/STT flow | Не менять |
-| Local inference | отдельный Local AI flow | Не менять; тот же profile compiler применит prompt при выборе этого профиля |
+| Роль                   | Текущая модель/контур                                                                                         | Отношение к задаче                                                                                 |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| Hosted text generation | `openai/gpt-oss-120b` default, `openai/gpt-oss-20b` same-family fallback, `qwen/qwen3.6-27b` explicit Preview | Получает обновлённый system prompt                                                                 |
+| Hosted vision          | `qwen/qwen3.6-27b`                                                                                            | Не менять; после распознавания вопроса text response всё равно следует активному interview profile |
+| Speech-to-text         | `whisper-large-v3-turbo`                                                                                      | Не менять; транскрипция становится текущим user message                                            |
+| Live audio             | capture/VAD/STT flow                                                                                          | Не менять                                                                                          |
+| Local inference        | отдельный Local AI flow                                                                                       | Не менять; тот же profile compiler применит prompt при выборе этого профиля                        |
 
 Официальные источники:
 
@@ -123,14 +123,14 @@ Write naturally in the required response language. Use B1-B2-level vocabulary, s
 2. `DONE` В `src/utils/aiProfiles.js` заменены только `persona`, `answerRules`, `responseStyle` и `length` у `SENIOR_JAVA_PROFILE`.
 3. `DONE` Добавлена одноразовая storage migration для существующего профиля; она обновляет prompt, но сохраняет личный User Context и behavior. Compiler, schema, UI, provider/model settings, streaming, STT, vision и fallback не изменены.
 4. `DONE` В `test/profile.test.js` добавлены минимальные проверки:
-   - ID и name не изменились;
-   - `length === 'concise'`;
-   - `format === 'teleprompter'`;
-   - prompt требует B1–B2 spoken style в выбранном языке;
-   - обычный вопрос не должен становиться deep dive;
-   - coding task требует approach, complexity и complete Java code;
-   - follow-up не повторяет весь предыдущий ответ;
-   - User Context boundary сохранена.
+    - ID и name не изменились;
+    - `length === 'concise'`;
+    - `format === 'teleprompter'`;
+    - prompt требует B1–B2 spoken style в выбранном языке;
+    - обычный вопрос не должен становиться deep dive;
+    - coding task требует approach, complexity и complete Java code;
+    - follow-up не повторяет весь предыдущий ответ;
+    - User Context boundary сохранена.
 5. `DONE` Локальные проверки schema/compiler и все автономные `test/*.js` пройдены.
 6. `DONE` Compiled prompt проверен: B1–B2, полный topic scope, coding discipline и follow-up rule присутствуют; старые `detailed` и 10-line limit отсутствуют.
 7. `DONE` Live Groq smoke/A-B исключён из текущей реализации: пользователь его отдельно не разрешал.
@@ -203,12 +203,12 @@ git diff --check
 3. `test/rendererRuntimeSmoke.js` — не применялся: это live UI smoke, которому требуется отдельно запущенное Electron-приложение на `127.0.0.1:9223`.
 4. `npm test` — в `package.json` отсутствует script `test`; проверки запущены напрямую через Node.
 5. Compiled profile contract — PASS:
-   - ID `profile_senior_java_interview`;
-   - `length: concise`;
-   - `format: teleprompter`;
-   - context count 6;
-   - B1–B2, все заявленные темы, coding task и follow-up rules присутствуют;
-   - старые `18–30 sentences` и `10 lines` отсутствуют.
+    - ID `profile_senior_java_interview`;
+    - `length: concise`;
+    - `format: teleprompter`;
+    - context count 6;
+    - B1–B2, все заявленные темы, coding task и follow-up rules присутствуют;
+    - старые `18–30 sentences` и `10 lines` отсутствуют.
 6. `git diff --check` — PASS; только предупреждения Git о будущем LF→CRLF.
 7. `npx prettier --write ...` — не выполнен: Prettier не установлен локально, а загрузка из npm registry запрещена текущей сетью. `git diff --check` и существующий четырёхпробельный стиль соблюдены.
 8. Реальные Groq calls не выполнялись согласно подтверждённому scope.
@@ -231,13 +231,13 @@ git diff --check
 
 ### Capability matrix
 
-| Роль | Изменение |
-|---|---|
+| Роль            | Изменение                                                                        |
+| --------------- | -------------------------------------------------------------------------------- |
 | Text generation | Убрать hardcoded English из Senior Java profile; язык задаёт compiled `LANGUAGE` |
-| Speech-to-text | Не менять; использует выбранный language hint |
-| Vision | Не менять |
-| Live audio | Не менять |
-| Local inference | Не менять; получает тот же compiled profile |
+| Speech-to-text  | Не менять; использует выбранный language hint                                    |
+| Vision          | Не менять                                                                        |
+| Live audio      | Не менять                                                                        |
+| Local inference | Не менять; получает тот же compiled profile                                      |
 
 ### Предлагаемый минимальный fix
 
@@ -245,10 +245,10 @@ git diff --check
 2. `DONE` В `SENIOR_JAVA_PROFILE.persona` hardcoded English заменён на ссылку на compiled `LANGUAGE`.
 3. `DONE` В `responseStyle` применена language-neutral формулировка; topic scope, краткость и coding rules не менялись.
 4. `DONE` Добавлен regression test:
-   - English compile содержит `Always reply in English`;
-   - Russian compile содержит `Always reply in Russian`;
-   - Senior Java profile больше нигде не требует English;
-   - B1–B2/simple spoken style сохраняется.
+    - English compile содержит `Always reply in English`;
+    - Russian compile содержит `Always reply in Russian`;
+    - Senior Java profile больше нигде не требует English;
+    - B1–B2/simple spoken style сохраняется.
 5. `DONE` Profile, storage, Groq baseline и все автономные tests пройдены.
 6. `DONE` Результаты записаны, задача возвращена в `DONE`.
 
@@ -334,13 +334,13 @@ git diff --check
 
 ### Capability matrix
 
-| Роль | Текущий контур | Решение |
-|---|---|---|
+| Роль                   | Текущий контур                                 | Решение                                                                  |
+| ---------------------- | ---------------------------------------------- | ------------------------------------------------------------------------ |
 | Hosted text generation | `openai/gpt-oss-120b`, 20B только 404 fallback | Получит уточнённый Senior Java prompt; модель и параметры пока не менять |
-| Hosted vision | `qwen/qwen3.6-27b` | Не менять |
-| Hosted STT | `whisper-large-v3-turbo` | Не менять |
-| Live audio | capture/VAD/STT → hosted text | Не менять |
-| Local inference | отдельный Ollama/HF flow | Получит тот же обновлённый compiled profile; модели не менять |
+| Hosted vision          | `qwen/qwen3.6-27b`                             | Не менять                                                                |
+| Hosted STT             | `whisper-large-v3-turbo`                       | Не менять                                                                |
+| Live audio             | capture/VAD/STT → hosted text                  | Не менять                                                                |
+| Local inference        | отдельный Ollama/HF flow                       | Получит тот же обновлённый compiled profile; модели не менять            |
 
 Актуальность ролей подтверждена официальными страницами Groq:
 
@@ -459,10 +459,10 @@ Manual smoke chain:
 
 - Не ограничиваться определением.
 - Для широкого вопроса `What is X?` / `How does X work?` дать компактное инженерное объяснение:
-  - какую проблему решает и где используется;
-  - как работает основной механизм;
-  - какую одну действительно полезную идею под капотом стоит знать;
-  - какой один нюанс, ограничение или trade-off важен на практике.
+    - какую проблему решает и где используется;
+    - как работает основной механизм;
+    - какую одну действительно полезную идею под капотом стоит знать;
+    - какой один нюанс, ограничение или trade-off важен на практике.
 - Это ориентиры, а не обязательный checklist: нерелевантный пункт нужно пропустить.
 - Дать достаточно материала, чтобы показать Senior-level понимание и оставить интервьюеру несколько естественных follow-up, но не перечислять private identifiers, wire format и редкие implementation details без прямого запроса.
 - Accuracy и удобство произнесения остаются обязательными; числового sentence target нет.
@@ -491,3 +491,39 @@ Manual smoke chain:
 - Persisted profile подтверждён: `seniorJavaInterviewV5.done=true`, `updated=true`; новые Senior-level rules присутствуют.
 - User Context сохранён (1328 символов), context count остался 6.
 - Для фактического smoke нужна новая сессия после полного закрытия старого экземпляра приложения.
+
+## Универсальная проверка coding-ответа — 2026-07-27
+
+Пользователь подтвердил минимальное prompt-only усиление после проверки Ping/Pong-ответа и отдельно запретил переносить детали тестовой задачи в общий профиль.
+
+### Scope
+
+1. `DONE` В coding-правило добавлена только универсальная проверка: идиоматичная обработка ошибок, отсутствие молчаливого игнорирования сбоев, проверка начального состояния, основного пути, завершения и релевантных edge cases.
+2. `DONE` Добавлена граница: не добавлять обработку, не относящуюся к видимой задаче.
+3. `DONE` Конкретные `InterruptedException`, `wait/notify`, `Ping` и `Pong` в prompt не добавлены.
+4. `DONE` Добавлена миграция `seniorJavaInterviewV6`, обновляющая только точный стандартный профиль и сохраняющая User Context и behavior.
+5. `DONE` Запустить profile/storage/baseline checks, применить миграцию к текущему профилю и записать результат.
+
+### Границы
+
+- Vision extraction, screenshot pipeline, модели, reasoning, fallback, история и настройки не меняются.
+- Пользовательские копии профиля не обновляются.
+- Реальный Groq-запрос не выполняется.
+
+### Проверки
+
+```powershell
+node test/profile.test.js
+node test/storage.test.js
+node test/groqBaseline.test.js
+git diff --check
+```
+
+### Результат
+
+- Все 18 автономных `test/*.js` прошли; live `rendererRuntimeSmoke.js` не запускался.
+- `seniorJavaInterviewV6` применена к текущему сохранённому профилю: `done=true`, `updated=true`.
+- User Context сохранён без изменений (1328 символов), context count остался 6.
+- Универсальное правило и граница релевантности присутствуют; `InterruptedException`, `wait/notify`, `Ping` и `Pong` отсутствуют.
+- `npm run package` прошёл; Windows x64 package пересобран.
+- Реальные Groq-запросы не выполнялись.

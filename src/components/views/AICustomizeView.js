@@ -116,6 +116,9 @@ export class AICustomizeView extends LitElement {
             textarea.rules {
                 min-height: 220px;
             }
+            textarea.response-style {
+                min-height: 110px;
+            }
             textarea.preview {
                 min-height: 280px;
                 font-family: var(--font-mono);
@@ -353,6 +356,7 @@ export class AICustomizeView extends LitElement {
         }
         const builtIns = this._profiles.filter(profile => profile.isBuiltin);
         const custom = this._profiles.filter(profile => !profile.isBuiltin);
+        const duplicateNames = new Set(custom.filter(profile => custom.filter(item => item.name === profile.name).length > 1).map(profile => profile.name));
         const p = this._draft.prompt;
         return html` <div class="unified-page">
             <div class="unified-wrap">
@@ -369,7 +373,12 @@ export class AICustomizeView extends LitElement {
                                     ${builtIns.map(x => html`<option value=${x.id} ?selected=${this._draft.id === x.id}>${x.name}</option>`)}
                                 </optgroup>
                                 <optgroup label="My profiles">
-                                    ${custom.map(x => html`<option value=${x.id} ?selected=${this._draft.id === x.id}>${x.name}</option>`)}
+                                    ${custom.map(
+                                        x =>
+                                            html`<option value=${x.id} ?selected=${this._draft.id === x.id}>
+                                                ${x.name}${duplicateNames.has(x.name) ? ` — ${x.id}` : ''}
+                                            </option>`
+                                    )}
                                 </optgroup>
                             </select>
                         </div>
@@ -414,7 +423,13 @@ export class AICustomizeView extends LitElement {
                         </div>
                         ${this._textareaField('Assistant role', p.persona, value => this._promptField('persona', value), 'role', 'Example: Act as a live interview assistant and write the exact words the candidate can say aloud.')}
                         ${this._textareaField('Answer instructions', p.answerRules, value => this._promptField('answerRules', value), 'rules', 'Example: explain relevant mechanisms, give a practical example, mention pitfalls, and never invent personal experience.')}
-                        ${this._inputField('Response style', p.responseStyle, value => this._promptField('responseStyle', value), 'Example: Natural, direct, senior-level speech with short paragraphs.')}
+                        ${this._textareaField(
+                            'Response style',
+                            p.responseStyle,
+                            value => this._promptField('responseStyle', value),
+                            'response-style',
+                            'Example: Natural, direct, senior-level speech with short paragraphs.'
+                        )}
                     </div>
 
                     <div class="section">
