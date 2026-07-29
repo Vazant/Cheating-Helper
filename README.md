@@ -1,60 +1,100 @@
-<img width="1299" height="424" alt="cd (1)" src="https://github.com/user-attachments/assets/b25fff4d-043d-4f38-9985-f832ae0d0f6e" />
+# Cheating Helper
 
-## Recall.ai - API for desktop recording
+Cheating Helper is a desktop assistant for interviews, meetings, presentations, and other live conversations. It can capture speech or a screenshot, send the relevant context to an AI model, and show the answer in a compact always-on-top Electron window.
 
-If you’re looking for a hosted desktop recording API, consider checking out [Recall.ai](https://www.recall.ai/product/desktop-recording-sdk/?utm_source=github&utm_medium=sponsorship&utm_campaign=sohzm-cheating-daddy), an API that records Zoom, Google Meet, Microsoft Teams, in-person meetings, and more.
+Current version: `0.8.0`
 
-This project is sponsored by Recall.ai.
+## What it does
 
----
+- Answers typed questions and captured speech in hosted or local mode.
+- Captures system audio or a microphone with separate push-to-talk shortcuts.
+- Analyzes screenshots through Groq or a local vision-capable Ollama model.
+- Uses reusable AI Profiles for different roles, response styles, and factual context.
+- Keeps conversation and screen-analysis history locally.
+- Lets you select and copy individual History messages.
+- Can save analyzed screenshots with their History entries. This is optional and off by default.
+- Supports an always-on-top overlay, click-through mode, themes, transparency, and configurable shortcuts.
 
-> [!NOTE]  
-> Use latest MacOS and Windows version, older versions have limited support
+## AI configuration
 
-> [!NOTE]  
-> During testing it wont answer if you ask something, you need to simulate interviewer asking question, which it will answer
+Hosted mode currently separates models by capability:
 
-A real-time AI assistant that provides contextual help during video calls, interviews, presentations, and meetings using screen capture and audio analysis.
+- Speech-to-text: Groq Whisper.
+- Text responses: a selected Groq text model.
+- Screenshot extraction: a Groq vision model, followed by the selected text model for the final answer.
 
-## Features
+Local mode uses Whisper for speech-to-text and Ollama for text or screenshot responses. Local and hosted processing are separate choices; the app does not silently switch between them.
 
-- **Live AI Assistance**: Real-time help powered by Google Gemini 2.0 Flash Live
-- **Screen & Audio Capture**: Analyzes what you see and hear for contextual responses
-- **Multiple Profiles**: Interview, Sales Call, Business Meeting, Presentation, Negotiation
-- **Transparent Overlay**: Always-on-top window that can be positioned anywhere
-- **Click-through Mode**: Make window transparent to clicks when needed
-- **Cross-platform**: Works on macOS, Windows, and Linux (kinda, dont use, just for testing rn)
+Gemini is currently disabled.
 
-## Setup
+## Getting started
 
-1. **Get a Gemini API Key**: Visit [Google AI Studio](https://aistudio.google.com/apikey)
-2. **Install Dependencies**: `npm install`
-3. **Run the App**: `npm start`
+Requirements:
 
-## Usage
+- Node.js and npm.
+- A Groq API key for hosted speech, text, and screenshot processing.
+- Windows audio and screen-capture permissions as needed.
+- Ollama only if you want local screenshot analysis.
 
-1. Enter your Gemini API key in the main window
-2. Choose your profile and language in settings
-3. Click "Start Session" to begin
-4. Position the window using keyboard shortcuts
-5. The AI will provide real-time assistance based on your screen and what interview asks
+Install dependencies and start the development build:
 
-## Keyboard Shortcuts
+```powershell
+npm install
+npm start
+```
 
-- **Window Movement**: `Ctrl/Cmd + Arrow Keys` - Move window
-- **Click-through**: `Ctrl/Cmd + M` - Toggle mouse events
-- **Close/Back**: `Ctrl/Cmd + \` - Close window or go back
-- **Send Message**: `Enter` - Send text to AI
+Create a packaged application:
 
-## Audio Capture
+```powershell
+npm run package
+```
 
-- **macOS**: [SystemAudioDump](https://github.com/Mohammed-Yasin-Mulla/Sound) for system audio
-- **Windows**: Loopback audio capture
-- **Linux**: Microphone input
+The current release has been packaged and smoke-tested on Windows x64. macOS and Linux code remains in the project, but those builds are not claimed as verified.
 
-## Requirements
+## Basic use
 
-- Electron-compatible OS (macOS, Windows, Linux)
-- Gemini API key
-- Screen recording permissions
-- Microphone/audio permissions
+1. Open Home and add your Groq API key.
+2. Choose a text model, screenshot provider, audio source, and language.
+3. Select or create an AI Profile.
+4. Start a session.
+5. Use the configured shortcuts to record speech, analyze the screen, move the window, or enable click-through mode.
+6. Open History to review and copy saved answers.
+
+The Help screen inside the app shows the active keyboard shortcuts.
+
+## AI Profiles
+
+Profiles control the facts the assistant may use and how it should answer. API keys and model selection remain global settings.
+
+The repository includes profiles for a Senior Java interview and an EPAM HR call. You can create, duplicate, import, export, and edit your own profiles. Profile changes apply after starting a new session; they do not alter a session already in progress.
+
+## History and screenshots
+
+Conversation text and screen-analysis answers are stored locally in the application configuration directory.
+
+If `Save analyzed screenshots in local History` is enabled, each successful screen analysis stores its JPEG separately from the session JSON. Deleting the session also deletes its screenshots. Older History entries without images remain readable.
+
+Screenshots can contain passwords, messages, source code, personal data, and other sensitive information. Leave this setting off unless you need the visual record.
+
+## Development checks
+
+The project uses JavaScript and Lit with Electron Forge.
+
+```powershell
+node test/storage.test.js
+node test/profile.test.js
+node test/vision.test.js
+npm run package
+```
+
+All autonomous checks are available under `test/*.test.js`. There is no configured linter yet.
+
+## Project status
+
+Cheating Helper is under active development. Remote updates and external feedback links are intentionally disabled until the fork has its own release and support infrastructure.
+
+## Attribution and license
+
+Cheating Helper is an independent fork of [Cheating Daddy](https://github.com/sohzm/cheating-daddy). The upstream project does not provide support, feedback, or updates for this fork.
+
+Licensed under GPL-3.0. See [LICENSE](LICENSE).
