@@ -9,7 +9,7 @@ let audioProcessor = null;
 let micAudioProcessor = null;
 let micAudioContext = null;
 let micStream = null;
-let audioBuffer = [];
+let systemAudioStreamAvailable = false;
 const SAMPLE_RATE = 24000;
 const AUDIO_CHUNK_DURATION = 0.1; // seconds
 const BUFFER_SIZE = 4096; // Increased buffer size for smoother audio
@@ -28,13 +28,18 @@ const storage = {
     // Config
     async getConfig() {
         const result = await ipcRenderer.invoke('storage:get-config');
-        return result.success ? result.data : {};
+        if (!result.success) throw new Error(result.error || 'Could not load config');
+        return result.data;
     },
     async setConfig(config) {
-        return ipcRenderer.invoke('storage:set-config', config);
+        const result = await ipcRenderer.invoke('storage:set-config', config);
+        if (!result.success) throw new Error(result.error || 'Could not save config');
+        return result;
     },
     async updateConfig(key, value) {
-        return ipcRenderer.invoke('storage:update-config', key, value);
+        const result = await ipcRenderer.invoke('storage:update-config', key, value);
+        if (!result.success) throw new Error(result.error || `Could not save ${key}`);
+        return result;
     },
 
     // Credentials
@@ -70,13 +75,18 @@ const storage = {
     // Preferences
     async getPreferences() {
         const result = await ipcRenderer.invoke('storage:get-preferences');
-        return result.success ? result.data : {};
+        if (!result.success) throw new Error(result.error || 'Could not load preferences');
+        return result.data;
     },
     async setPreferences(preferences) {
-        return ipcRenderer.invoke('storage:set-preferences', preferences);
+        const result = await ipcRenderer.invoke('storage:set-preferences', preferences);
+        if (!result.success) throw new Error(result.error || 'Could not save preferences');
+        return result;
     },
     async updatePreference(key, value) {
-        return ipcRenderer.invoke('storage:update-preference', key, value);
+        const result = await ipcRenderer.invoke('storage:update-preference', key, value);
+        if (!result.success) throw new Error(result.error || `Could not save ${key}`);
+        return result;
     },
     async createAiProfile(sourceId = null, name = '') {
         const result = await ipcRenderer.invoke('storage:create-ai-profile', sourceId, name);
@@ -112,10 +122,13 @@ const storage = {
     // Keybinds
     async getKeybinds() {
         const result = await ipcRenderer.invoke('storage:get-keybinds');
-        return result.success ? result.data : null;
+        if (!result.success) throw new Error(result.error || 'Could not load shortcuts');
+        return result.data;
     },
     async setKeybinds(keybinds) {
-        return ipcRenderer.invoke('storage:set-keybinds', keybinds);
+        const result = await ipcRenderer.invoke('storage:set-keybinds', keybinds);
+        if (!result.success) throw new Error(result.error || 'Could not save shortcuts');
+        return result;
     },
 
     // Sessions (History)
@@ -239,25 +252,80 @@ async function initializeCloud(profile = 'interview') {
 // Listen for status updates
 ipcRenderer.on('update-status', (event, status) => {
     console.log('Status update:', status);
-    const paused = preferencesCache?.speechCaptureMode === 'toggle' && !speechCaptureGate.isRecording();
-    cheatingDaddy.setStatus(paused && status === 'Listening...' ? 'Ready · use speech shortcut to record' : status);
+    const paused = preferencesCache?.speechCaptureMode === 'toggle' && speechCaptureGate.getState().state === 'idle';
+    cheatingDaddy.setStatus(paused && status === 'Listening...' ? 'Ready · use a speech shortcut to record' : status);
 });
 
 ipcRenderer.on('shortcut-registration-status', (event, result) => {
-    if (result?.action === 'toggleSpeechCapture' && !result.success) cheatingDaddy.setStatus(result.error || 'Speech shortcut is unavailable');
+    if (['toggleSystemAudio', 'toggleMicrophone'].includes(result?.action) && !result.success) {
+        cheatingDaddy.setStatus(result.error || 'Speech shortcut is unavailable');
+    }
 });
 
-ipcRenderer.on('toggle-speech-capture', async () => {
-    if (preferencesCache?.speechCaptureMode !== 'toggle' || (!mediaStream && !micStream)) return;
-    const recording = speechCaptureGate.toggle();
-    const result = await ipcRenderer.invoke(recording ? 'reset-speech-capture' : 'flush-speech-capture');
+ipcRenderer.on('toggle-speech-capture', async (event, payload = {}) => {
+    const source = payload.source === 'microphone' ? 'microphone' : 'system';
+    if (preferencesCache?.speechCaptureMode !== 'toggle') {
+        cheatingDaddy.setStatus('Enable Toggle-to-talk in Settings to use speech shortcuts');
+        return;
+    }
+    const available = source === 'microphone' ? Boolean(micStream) : systemAudioStreamAvailable;
+    if (!available) {
+        cheatingDaddy.setStatus(`${source === 'system' ? 'System Audio' : 'Microphone'} is unavailable`);
+        return;
+    }
+
+    const transition = speechCaptureGate.toggle(source);
+    if (transition.action === 'blocked') {
+        cheatingDaddy.setStatus(
+            transition.state === 'finalizing'
+                ? 'Previous recording is still being processed'
+                : `${transition.source === 'system' ? 'System Audio' : 'Microphone'} recording is active`
+        );
+        return;
+    }
+    if (!['start', 'stop', 'retry'].includes(transition.action)) return;
+
+    const channel =
+        transition.action === 'start' ? 'start-speech-capture' : transition.action === 'retry' ? 'retry-speech-capture' : 'finish-speech-capture';
+    const result = await ipcRenderer.invoke(channel, source);
     if (!result?.success) {
-        speechCaptureGate.toggle();
+        speechCaptureGate.fail(transition.sequence, result?.retryable === true);
         cheatingDaddy.setStatus(result?.error || 'Speech recording control failed');
         return;
     }
-    cheatingDaddy.setStatus(recording ? 'Recording...' : result.queued ? 'Transcribing...' : 'No speech detected');
+    if (transition.action === 'start') {
+        cheatingDaddy.setStatus(`Recording ${source === 'system' ? 'System Audio' : 'Microphone'}...`);
+    } else {
+        speechCaptureGate.complete(transition.sequence);
+        cheatingDaddy.setStatus(result.queued ? 'Answering...' : 'No speech detected');
+    }
 });
+
+function getMicrophoneConstraints(deviceId = '') {
+    return {
+        sampleRate: SAMPLE_RATE,
+        channelCount: 1,
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+        ...(deviceId ? { deviceId: { exact: deviceId } } : {}),
+    };
+}
+
+async function getMicrophoneDevices(requestPermission = false) {
+    if (requestPermission) {
+        const permissionStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+        permissionStream.getTracks().forEach(track => track.stop());
+    }
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    let microphoneNumber = 0;
+    return devices
+        .filter(device => device.kind === 'audioinput')
+        .map(device => ({
+            deviceId: device.deviceId,
+            label: device.label || `Microphone ${++microphoneNumber}`,
+        }));
+}
 
 async function startCapture(screenshotIntervalSeconds = 5, imageQuality = 'medium', captureAudio = true) {
     // Store the image quality for manual screenshots
@@ -266,8 +334,12 @@ async function startCapture(screenshotIntervalSeconds = 5, imageQuality = 'mediu
     // Refresh preferences cache
     await loadPreferencesCache();
     const audioMode = preferencesCache.audioMode === 'mic_only' ? 'mic_only' : 'speaker_only';
-    speechCaptureGate.reset(preferencesCache.speechCaptureMode);
+    const toggleMode = preferencesCache.speechCaptureMode === 'toggle';
+    const systemAudioNeeded = captureAudio && (toggleMode || audioMode === 'speaker_only');
+    const microphoneNeeded = captureAudio && (toggleMode || audioMode === 'mic_only');
+    speechCaptureGate.reset(preferencesCache.speechCaptureMode, audioMode === 'mic_only' ? 'microphone' : 'system');
     await ipcRenderer.invoke('set-speech-capture-enabled', speechCaptureGate.isRecording());
+    let systemAudioAvailable = false;
 
     try {
         if (isMacOS) {
@@ -275,9 +347,11 @@ async function startCapture(screenshotIntervalSeconds = 5, imageQuality = 'mediu
             console.log('Starting macOS capture with SystemAudioDump...');
 
             // Start macOS audio capture
-            if (captureAudio && audioMode === 'speaker_only') {
+            if (systemAudioNeeded) {
                 const audioResult = await ipcRenderer.invoke('start-macos-audio');
-                if (!audioResult.success) throw new Error('Failed to start macOS audio capture: ' + audioResult.error);
+                systemAudioAvailable = audioResult.success;
+                if (!audioResult.success && !toggleMode) throw new Error('Failed to start macOS audio capture: ' + audioResult.error);
+                if (!audioResult.success) console.warn('macOS system audio is unavailable:', audioResult.error);
             }
 
             // Get screen capture for screenshots
@@ -292,16 +366,10 @@ async function startCapture(screenshotIntervalSeconds = 5, imageQuality = 'mediu
 
             console.log('macOS screen capture started - audio handled by SystemAudioDump');
 
-            if (captureAudio && audioMode === 'mic_only') {
+            if (microphoneNeeded) {
                 try {
                     micStream = await navigator.mediaDevices.getUserMedia({
-                        audio: {
-                            sampleRate: SAMPLE_RATE,
-                            channelCount: 1,
-                            echoCancellation: true,
-                            noiseSuppression: true,
-                            autoGainControl: true,
-                        },
+                        audio: getMicrophoneConstraints(preferencesCache.microphoneDeviceId),
                         video: false,
                     });
                     console.log('macOS microphone capture started');
@@ -320,22 +388,22 @@ async function startCapture(screenshotIntervalSeconds = 5, imageQuality = 'mediu
                         width: { ideal: 1920 },
                         height: { ideal: 1080 },
                     },
-                    audio:
-                        captureAudio && audioMode === 'speaker_only'
-                            ? {
-                                  sampleRate: SAMPLE_RATE,
-                                  channelCount: 1,
-                                  echoCancellation: false,
-                                  noiseSuppression: false,
-                                  autoGainControl: false,
-                              }
-                            : false,
+                    audio: systemAudioNeeded
+                        ? {
+                              sampleRate: SAMPLE_RATE,
+                              channelCount: 1,
+                              echoCancellation: false,
+                              noiseSuppression: false,
+                              autoGainControl: false,
+                          }
+                        : false,
                 });
 
                 console.log('Linux system audio capture via getDisplayMedia succeeded');
 
                 // Setup audio processing for Linux system audio
                 if (captureAudio && mediaStream.getAudioTracks().length) setupLinuxSystemAudioProcessing();
+                systemAudioAvailable = mediaStream.getAudioTracks().length > 0;
             } catch (systemAudioError) {
                 console.warn('System audio via getDisplayMedia failed, trying screen-only capture:', systemAudioError);
 
@@ -351,16 +419,10 @@ async function startCapture(screenshotIntervalSeconds = 5, imageQuality = 'mediu
             }
 
             // Additionally get microphone input for Linux based on audio mode
-            if (captureAudio && audioMode === 'mic_only') {
+            if (microphoneNeeded) {
                 try {
                     micStream = await navigator.mediaDevices.getUserMedia({
-                        audio: {
-                            sampleRate: SAMPLE_RATE,
-                            channelCount: 1,
-                            echoCancellation: true,
-                            noiseSuppression: true,
-                            autoGainControl: true,
-                        },
+                        audio: getMicrophoneConstraints(preferencesCache.microphoneDeviceId),
                         video: false,
                     });
 
@@ -383,33 +445,27 @@ async function startCapture(screenshotIntervalSeconds = 5, imageQuality = 'mediu
                     width: { ideal: 1920 },
                     height: { ideal: 1080 },
                 },
-                audio:
-                    captureAudio && audioMode === 'speaker_only'
-                        ? {
-                              sampleRate: SAMPLE_RATE,
-                              channelCount: 1,
-                              echoCancellation: true,
-                              noiseSuppression: true,
-                              autoGainControl: true,
-                          }
-                        : false,
+                audio: systemAudioNeeded
+                    ? {
+                          sampleRate: SAMPLE_RATE,
+                          channelCount: 1,
+                          echoCancellation: true,
+                          noiseSuppression: true,
+                          autoGainControl: true,
+                      }
+                    : false,
             });
 
             console.log('Windows capture started with loopback audio');
 
             // Setup audio processing for Windows loopback audio only
             if (captureAudio && mediaStream.getAudioTracks().length) setupWindowsLoopbackProcessing();
+            systemAudioAvailable = mediaStream.getAudioTracks().length > 0;
 
-            if (captureAudio && audioMode === 'mic_only') {
+            if (microphoneNeeded) {
                 try {
                     micStream = await navigator.mediaDevices.getUserMedia({
-                        audio: {
-                            sampleRate: SAMPLE_RATE,
-                            channelCount: 1,
-                            echoCancellation: true,
-                            noiseSuppression: true,
-                            autoGainControl: true,
-                        },
+                        audio: getMicrophoneConstraints(preferencesCache.microphoneDeviceId),
                         video: false,
                     });
                     console.log('Windows microphone capture started');
@@ -420,10 +476,12 @@ async function startCapture(screenshotIntervalSeconds = 5, imageQuality = 'mediu
             }
         }
 
-        if (captureAudio && audioMode === 'speaker_only' && !isMacOS && !mediaStream?.getAudioTracks().length) {
+        if (systemAudioNeeded && !toggleMode && !systemAudioAvailable) {
             throw new Error('System audio is unavailable for the selected screen');
         }
-        if (captureAudio && audioMode === 'mic_only' && !micStream) throw new Error('Microphone is unavailable or permission was denied');
+        if (microphoneNeeded && !toggleMode && !micStream) throw new Error('Microphone is unavailable or permission was denied');
+        if (toggleMode && !systemAudioAvailable && !micStream) throw new Error('System Audio and Microphone are unavailable');
+        systemAudioStreamAvailable = systemAudioAvailable;
 
         console.log('MediaStream obtained:', {
             hasVideo: mediaStream.getVideoTracks().length > 0,
@@ -433,11 +491,11 @@ async function startCapture(screenshotIntervalSeconds = 5, imageQuality = 'mediu
 
         // Manual mode only - screenshots captured on demand via shortcut
         console.log('Manual mode enabled - screenshots will be captured on demand only');
-        if (preferencesCache.speechCaptureMode === 'toggle') cheatingDaddy.setStatus('Ready · use speech shortcut to record');
+        if (toggleMode) cheatingDaddy.setStatus('Ready · use a speech shortcut to record');
         return true;
     } catch (err) {
         console.error('Error starting capture:', err);
-        stopCapture();
+        await stopCapture();
         cheatingDaddy.setStatus('error');
         return false;
     }
@@ -453,7 +511,7 @@ function setupLinuxMicProcessing(stream) {
     const samplesPerChunk = SAMPLE_RATE * AUDIO_CHUNK_DURATION;
 
     micProcessor.onaudioprocess = async e => {
-        if (!speechCaptureGate.isRecording()) {
+        if (!speechCaptureGate.accepts('microphone')) {
             audioBuffer = [];
             return;
         }
@@ -490,7 +548,7 @@ function setupLinuxSystemAudioProcessing() {
     const samplesPerChunk = SAMPLE_RATE * AUDIO_CHUNK_DURATION;
 
     audioProcessor.onaudioprocess = async e => {
-        if (!speechCaptureGate.isRecording()) {
+        if (!speechCaptureGate.accepts('system')) {
             audioBuffer = [];
             return;
         }
@@ -524,7 +582,7 @@ function setupWindowsLoopbackProcessing() {
     const samplesPerChunk = SAMPLE_RATE * AUDIO_CHUNK_DURATION;
 
     audioProcessor.onaudioprocess = async e => {
-        if (!speechCaptureGate.isRecording()) {
+        if (!speechCaptureGate.accepts('system')) {
             audioBuffer = [];
             return;
         }
@@ -745,9 +803,10 @@ async function captureManualScreenshot(imageQuality = null) {
 // Expose functions to global scope for external access
 window.captureManualScreenshot = captureManualScreenshot;
 
-function stopCapture() {
+async function stopCapture() {
     speechCaptureGate.reset('toggle');
-    ipcRenderer.invoke('set-speech-capture-enabled', false).catch(() => {});
+    systemAudioStreamAvailable = false;
+    await ipcRenderer.invoke('set-speech-capture-enabled', false).catch(() => {});
     if (screenshotInterval) {
         clearInterval(screenshotInterval);
         screenshotInterval = null;
@@ -764,15 +823,10 @@ function stopCapture() {
         micAudioProcessor = null;
     }
 
-    if (audioContext) {
-        audioContext.close();
-        audioContext = null;
-    }
-
-    if (micAudioContext) {
-        micAudioContext.close();
-        micAudioContext = null;
-    }
+    const contexts = [audioContext, micAudioContext].filter(Boolean);
+    audioContext = null;
+    micAudioContext = null;
+    await Promise.all(contexts.map(context => context.close().catch(() => {})));
 
     if (micStream) {
         micStream.getTracks().forEach(track => track.stop());
@@ -786,7 +840,7 @@ function stopCapture() {
 
     // Stop macOS audio capture if running
     if (isMacOS) {
-        ipcRenderer.invoke('stop-macos-audio').catch(err => {
+        await ipcRenderer.invoke('stop-macos-audio').catch(err => {
             console.error('Error stopping macOS audio:', err);
         });
     }
@@ -844,20 +898,6 @@ ipcRenderer.on('save-session-context', async (event, data) => {
         console.log('Session context saved:', data.sessionId, 'profile:', data.profile);
     } catch (error) {
         console.error('Error saving session context:', error);
-    }
-});
-
-// Listen for screen analysis responses (from ctrl+enter)
-ipcRenderer.on('save-screen-analysis', async (event, data) => {
-    try {
-        await storage.saveSession(data.sessionId, {
-            screenAnalysisHistory: data.fullHistory,
-            profile: data.profile,
-            customPrompt: data.customPrompt,
-        });
-        console.log('Screen analysis saved:', data.sessionId);
-    } catch (error) {
-        console.error('Error saving screen analysis:', error);
     }
 });
 
@@ -1180,6 +1220,7 @@ const cheatingDaddy = {
     initializeLocal,
     startCapture,
     stopCapture,
+    getMicrophoneDevices,
     sendTextMessage,
     handleShortcut,
 

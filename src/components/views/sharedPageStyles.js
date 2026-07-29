@@ -137,6 +137,31 @@ export const unifiedPageStyles = css`
         line-height: 1.45;
     }
 
+    ::-webkit-scrollbar {
+        width: 8px;
+        height: 8px;
+    }
+
+    ::-webkit-scrollbar-track {
+        background: transparent;
+    }
+
+    ::-webkit-scrollbar-thumb {
+        background: var(--border-strong);
+        border: 2px solid transparent;
+        border-radius: 999px;
+        background-clip: padding-box;
+    }
+
+    ::-webkit-scrollbar-thumb:hover {
+        background: var(--text-muted);
+        background-clip: padding-box;
+    }
+
+    ::-webkit-scrollbar-button {
+        display: none;
+    }
+
     .chip {
         display: inline-flex;
         align-items: center;

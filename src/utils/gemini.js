@@ -11,11 +11,23 @@ const {
     activateGroqApiKey,
     getPreferences,
     getAiProfile,
+    saveSession,
+    saveScreenshotAsset,
+    deleteScreenshotAsset,
 } = require('../storage');
 const { connectCloud, sendCloudAudio, sendCloudText, sendCloudImage, closeCloud, isCloudActive, setOnTurnComplete } = require('./cloud');
-const { GROQ_VISION_MODEL, buildVisionPrompt } = require('./vision');
+const {
+    GROQ_VISION_MODEL,
+    VISION_EXTRACTION_SYSTEM_PROMPT,
+    buildVisionPrompt,
+    buildVisionExtractionPrompt,
+    parseVisionExtraction,
+    buildVisionSystemPrompt,
+    buildVisionAnswerSystemPrompt,
+    buildVisionAnswerTurn,
+} = require('./vision');
 const { getLanguageConfig } = require('./aiProfiles');
-const { createSpeechSegmenter, encodePcm16Wav } = require('./audioPipeline');
+const { createSpeechSegmenter, createManualAudioChunker, joinTranscriptParts, encodePcm16Wav } = require('./audioPipeline');
 const { createResponseId, createResponsePayload, createResponseUpdate } = require('./responsePayload');
 const {
     getGroqFallbackOrder,
@@ -56,6 +68,9 @@ let hostedAudioSegmenter = null;
 let hostedAudioSource = 'system';
 let hostedAudioQueue = Promise.resolve();
 let speechCaptureEnabled = true;
+let speechCaptureMode = 'toggle';
+let activeManualAudioSession = null;
+let manualAudioSessionId = 0;
 let groqTextQueue = Promise.resolve();
 let hostedUtteranceId = 0;
 const pendingUtteranceIds = new Set();
@@ -205,31 +220,37 @@ function saveConversationTurn(transcription, aiResponse, metadata = {}) {
     });
 }
 
-function saveScreenAnalysis(prompt, response, model, provider = 'unknown') {
+function saveScreenAnalysis(prompt, response, model, provider = 'unknown', metadata = {}) {
     if (!currentSessionId) {
         initializeNewSession();
     }
 
+    const timestamp = Date.now();
+    const imageRef = metadata.screenshotBuffer ? saveScreenshotAsset(currentSessionId, timestamp, metadata.screenshotBuffer) : null;
     const analysisEntry = {
-        timestamp: Date.now(),
+        timestamp,
         prompt: prompt,
         response: response.trim(),
         model,
         provider,
-        pipeline: 'direct',
+        pipeline: metadata.pipeline || 'direct',
+        ...(imageRef ? { imageRef, imageBytes: metadata.screenshotBuffer.length } : {}),
+        ...(metadata.visionModel ? { visionModel: metadata.visionModel } : {}),
+        ...(metadata.responseModel ? { responseModel: metadata.responseModel } : {}),
     };
 
     screenAnalysisHistory.push(analysisEntry);
-    console.log('[Vision history]', { provider, model, pipeline: 'direct' });
-
-    // Send to renderer to save
-    sendToRenderer('save-screen-analysis', {
-        sessionId: currentSessionId,
-        analysis: analysisEntry,
-        fullHistory: screenAnalysisHistory,
+    console.log('[Vision history]', { provider, model, pipeline: analysisEntry.pipeline });
+    const saved = saveSession(currentSessionId, {
+        screenAnalysisHistory,
         profile: currentProfile,
         customPrompt: currentCustomPrompt,
     });
+    if (!saved) {
+        screenAnalysisHistory.pop();
+        if (imageRef) deleteScreenshotAsset(imageRef);
+        console.error('Could not save screen analysis history');
+    }
 }
 
 function getCurrentSessionData() {
@@ -340,15 +361,19 @@ function readGroqError(errorText) {
     }
 }
 
-function queueGroqText(text, requestContext = getHostedRequestContext()) {
+function queueGroqTextRequest(text, requestContext, options = {}) {
     if (!requestContext) return Promise.resolve(false);
-    const queued = groqTextQueue.then(() => sendToGroq(text, requestContext));
+    const queued = groqTextQueue.then(() => sendToGroq(text, requestContext, options));
     groqTextQueue = queued.catch(error => {
         console.error('[Groq text queue]', error.message);
         if (isHostedRequestActive(requestContext)) sendToRenderer('update-status', `Groq request failed: ${error.message}`);
         return false;
     });
     return queued;
+}
+
+function queueGroqText(text, requestContext = getHostedRequestContext()) {
+    return queueGroqTextRequest(text, requestContext);
 }
 
 async function transcribeGroqAudio(wavBuffer, language, requestContext) {
@@ -457,12 +482,120 @@ function configureHostedAudio(audioMode) {
     });
 }
 
-function processHostedAudioChunk(source, data, mimeType) {
-    if (!speechCaptureEnabled) return { success: true, ignored: true };
-    if (!hostedAudioSegmenter || source !== hostedAudioSource) return { success: true, ignored: true };
-    if (mimeType !== 'audio/pcm;rate=24000' || typeof data !== 'string') return { success: false, error: 'Unsupported audio format' };
-    const pcmBuffer = Buffer.from(data, 'base64');
-    return processHostedPcmBuffer(source, pcmBuffer);
+function clearManualAudioSession(session = activeManualAudioSession) {
+    if (!session) return;
+    session.chunker.reset();
+    for (const chunk of session.chunks) chunk.audio = null;
+    if (activeManualAudioSession === session) activeManualAudioSession = null;
+}
+
+async function transcribeManualChunk(session, chunk) {
+    if (currentProviderMode === 'local') {
+        const text = await getLocalAi().transcribeLocalChunk(chunk.audio);
+        return text ? { success: true, text } : { success: false, error: 'Local Whisper returned an empty transcript' };
+    }
+
+    return transcribeGroqAudio(encodePcm16Wav(chunk.audio), currentGroqSession?.language, session.requestContext);
+}
+
+function queueManualAudioChunk(session, audio) {
+    const chunk = { sequence: session.chunks.length, audio: Buffer.from(audio), result: null };
+    session.chunks.push(chunk);
+    session.queue = session.queue.then(async () => {
+        if (activeManualAudioSession !== session) return;
+        try {
+            chunk.result = await transcribeManualChunk(session, chunk);
+        } catch (error) {
+            chunk.result = { success: false, error: error.message };
+        }
+    });
+}
+
+function startManualSpeechCapture(source) {
+    if (speechCaptureMode !== 'toggle') return { success: false, error: 'Toggle-to-talk is not enabled' };
+    if (!['system', 'microphone'].includes(source)) return { success: false, error: 'Unsupported audio source' };
+    if (activeManualAudioSession) {
+        return {
+            success: false,
+            error: `${activeManualAudioSession.source === 'system' ? 'System Audio' : 'Microphone'} recording is already active`,
+        };
+    }
+
+    const session = {
+        id: ++manualAudioSessionId,
+        source,
+        state: 'recording',
+        chunks: [],
+        queue: Promise.resolve(),
+        requestContext: currentProviderMode === 'local' ? null : getHostedRequestContext(),
+        chunker: null,
+    };
+    if (currentProviderMode !== 'local' && !session.requestContext) return { success: false, error: 'No active hosted session' };
+    session.chunker = createManualAudioChunker({ onChunk: audio => queueManualAudioChunk(session, audio) });
+    activeManualAudioSession = session;
+    speechCaptureEnabled = true;
+    sendToRenderer('update-status', `Recording ${source === 'system' ? 'System Audio' : 'Microphone'}...`);
+    return { success: true, sessionId: session.id };
+}
+
+function dispatchFinalTranscript(session, transcript) {
+    sendToRenderer('update-status', 'Answering...');
+    if (currentProviderMode === 'local') {
+        getLocalAi()
+            .sendLocalTranscript(transcript)
+            .catch(error => sendToRenderer('update-status', `Local AI error: ${error.message}`));
+    } else {
+        queueGroqText(transcript, session.requestContext).catch(error => sendToRenderer('update-status', `Groq request failed: ${error.message}`));
+    }
+}
+
+async function finalizeManualSpeechCapture(source, retryFailedOnly = false) {
+    const session = activeManualAudioSession;
+    if (!session || session.source !== source) return { success: false, error: 'No matching recording is active' };
+    if (session.state === 'finalizing') return { success: false, error: 'Recording is already being processed' };
+
+    session.state = 'finalizing';
+    speechCaptureEnabled = false;
+    if (!retryFailedOnly) session.chunker.flush();
+    sendToRenderer('update-status', 'Transcribing...');
+    await session.queue;
+    if (activeManualAudioSession !== session) return { success: false, error: 'Recording session was cancelled' };
+
+    if (retryFailedOnly) {
+        for (const chunk of session.chunks.filter(item => !item.result?.success)) {
+            chunk.result = await transcribeManualChunk(session, chunk);
+        }
+    }
+
+    const failed = session.chunks.find(chunk => !chunk.result?.success);
+    if (failed) {
+        session.state = 'failed';
+        const error = failed.result?.error || `Speech recognition failed for part ${failed.sequence + 1}`;
+        const retryMessage = `${error}. Press the same shortcut to retry.`;
+        sendToRenderer('update-status', retryMessage);
+        return { success: false, retryable: true, error: retryMessage };
+    }
+
+    const transcript = joinTranscriptParts(session.chunks.map(chunk => chunk.result.text));
+    if (!transcript) {
+        clearManualAudioSession(session);
+        sendToRenderer('update-status', 'No speech detected');
+        return { success: true, queued: false };
+    }
+
+    clearManualAudioSession(session);
+    dispatchFinalTranscript(session, transcript);
+    return { success: true, queued: true };
+}
+
+function processManualAudioBuffer(source, pcmBuffer) {
+    const session = activeManualAudioSession;
+    if (!speechCaptureEnabled || !session || session.state !== 'recording' || session.source !== source) {
+        return { success: true, ignored: true };
+    }
+    if (!pcmBuffer.length || pcmBuffer.length % 2 || pcmBuffer.length > 24000 * 2) return { success: false, error: 'Invalid audio chunk' };
+    session.chunker.push(pcmBuffer);
+    return { success: true };
 }
 
 function processHostedPcmBuffer(source, pcmBuffer) {
@@ -473,9 +606,36 @@ function processHostedPcmBuffer(source, pcmBuffer) {
     return { success: true };
 }
 
-async function sendToGroq(transcription, requestContext = getHostedRequestContext()) {
+function processIncomingPcmBuffer(source, pcmBuffer) {
+    if (speechCaptureMode === 'toggle') return processManualAudioBuffer(source, pcmBuffer);
+    if (!speechCaptureEnabled || source !== hostedAudioSource) return { success: true, ignored: true };
+    if (currentProviderMode === 'cloud') {
+        sendCloudAudio(pcmBuffer);
+        return { success: true };
+    }
+    if (currentProviderMode === 'local') {
+        getLocalAi().processLocalAudio(pcmBuffer);
+        return { success: true };
+    }
+    return processHostedPcmBuffer(source, pcmBuffer);
+}
+
+function processIncomingAudioContent(source, data, mimeType) {
+    if (mimeType !== 'audio/pcm;rate=24000' || typeof data !== 'string') return { success: false, error: 'Unsupported audio format' };
+    return processIncomingPcmBuffer(source, Buffer.from(data, 'base64'));
+}
+
+async function sendToGroq(transcription, requestContext = getHostedRequestContext(), options = {}) {
     if (!isHostedRequestActive(requestContext)) return false;
     const requestReceivedAt = Date.now();
+    const requestHistory = Array.isArray(options.history) ? options.history : groqConversationHistory;
+    const selectedModel = options.model || currentGroqSession?.model;
+    const systemPrompt = options.systemPrompt || currentGroqSession?.systemPrompt || currentSystemPrompt;
+    const behavior = options.behavior || currentGroqSession?.behavior;
+    const persistConversation = options.persistConversation !== false;
+    const returnDetails = options.returnDetails === true;
+    const responseSourceText = options.responseSourceText ?? transcription;
+    const metricStage = options.stage || 'text';
     const groqApiKeys = getGroqApiKeySequence();
     if (!groqApiKeys.length) {
         console.warn('A Groq API key is required for the selected hosted text model');
@@ -491,34 +651,29 @@ async function sendToGroq(transcription, requestContext = getHostedRequestContex
     const responseId = createResponseId();
     const keyActivationRequest = groqKeyActivation.begin(() => isHostedRequestActive(requestContext));
 
-    const models = getGroqFallbackOrder(currentGroqSession?.model);
+    const models = getGroqFallbackOrder(selectedModel);
 
     const userTurn = {
         role: 'user',
         content: transcription.trim(),
     };
-    groqConversationHistory.push(userTurn);
+    requestHistory.push(userTurn);
 
     const removeUserTurn = () => {
-        const index = groqConversationHistory.lastIndexOf(userTurn);
-        if (index !== -1) groqConversationHistory.splice(index, 1);
+        const index = requestHistory.lastIndexOf(userTurn);
+        if (index !== -1) requestHistory.splice(index, 1);
     };
 
-    const requestPlan = buildGroqRequestPlan(
-        currentGroqSession?.systemPrompt || currentSystemPrompt,
-        groqConversationHistory,
-        currentGroqSession?.behavior,
-        currentGroqSession?.tpmLimit
-    );
+    const requestPlan = buildGroqRequestPlan(systemPrompt, requestHistory, behavior, currentGroqSession?.tpmLimit);
     const metricBase = {
         requestId: responseId,
-        stage: 'text',
-        selectedModel: currentGroqSession?.model,
+        stage: metricStage,
+        selectedModel,
         estimatedInputTokens: requestPlan.inputTokens,
         includedPairs: requestPlan.messages ? Math.max(0, (requestPlan.messages.length - 2) / 2) : 0,
         trimmedMessages: requestPlan.trimmedMessages || 0,
         plannedCompletionTokens: requestPlan.maxCompletionTokens,
-        reasoningMode: currentGroqSession?.model?.startsWith('openai/gpt-oss-') ? 'low' : null,
+        reasoningMode: selectedModel?.startsWith('openai/gpt-oss-') ? options.reasoningEffort || 'low' : null,
     };
     const recordAttempt = (actualModel, keySlot, status, details = {}) =>
         recordGroqMetric({ ...metricBase, actualModel, keySlot, status, ...details });
@@ -552,6 +707,7 @@ async function sendToGroq(transcription, requestContext = getHostedRequestContex
                     messages: requestPlan.messages,
                     stream: true,
                     ...getGroqTextRequestOptions(model, requestPlan.maxCompletionTokens),
+                    ...(options.reasoningEffort && model.startsWith('openai/gpt-oss-') ? { reasoning_effort: options.reasoningEffort } : {}),
                 }),
                 signal: requestContext.signal,
             });
@@ -694,7 +850,7 @@ async function sendToGroq(transcription, requestContext = getHostedRequestContex
             if (displayText && (isFirst || now - lastRenderAt >= 40)) {
                 sendToRenderer(
                     isFirst ? 'new-response' : 'update-response',
-                    isFirst ? createResponsePayload(displayText, transcription, responseId) : createResponseUpdate(displayText, responseId)
+                    isFirst ? createResponsePayload(displayText, responseSourceText, responseId) : createResponseUpdate(displayText, responseId)
                 );
                 isFirst = false;
                 lastRenderAt = now;
@@ -719,12 +875,12 @@ async function sendToGroq(transcription, requestContext = getHostedRequestContex
             const partialResponse = stripThinkingTags(fullText).trim();
             if (partialResponse) {
                 const markedResponse = markIncompleteResponse(partialResponse, 'stream-error');
-                groqConversationHistory.push({ role: 'assistant', content: markedResponse });
-                saveConversationTurn(transcription, partialResponse, { status: 'incomplete', reason: 'stream-error' });
+                requestHistory.push({ role: 'assistant', content: markedResponse });
+                if (persistConversation) saveConversationTurn(transcription, partialResponse, { status: 'incomplete', reason: 'stream-error' });
                 sendToRenderer(
                     isFirst ? 'new-response' : 'update-response',
                     isFirst
-                        ? createResponsePayload(`${partialResponse}\n\n_Response interrupted before completion._`, transcription, responseId)
+                        ? createResponsePayload(`${partialResponse}\n\n_Response interrupted before completion._`, responseSourceText, responseId)
                         : createResponseUpdate(`${partialResponse}\n\n_Response interrupted before completion._`, responseId)
                 );
             } else {
@@ -765,7 +921,7 @@ async function sendToGroq(transcription, requestContext = getHostedRequestContex
         if (cleanedResponse !== lastRenderedText)
             sendToRenderer(
                 isFirst ? 'new-response' : 'update-response',
-                isFirst ? createResponsePayload(cleanedResponse, transcription, responseId) : createResponseUpdate(cleanedResponse, responseId)
+                isFirst ? createResponsePayload(cleanedResponse, responseSourceText, responseId) : createResponseUpdate(cleanedResponse, responseId)
             );
         const streamDoneAt = Date.now();
         const timings = {
@@ -785,21 +941,21 @@ async function sendToGroq(transcription, requestContext = getHostedRequestContex
         });
 
         if (finishReason === 'length') {
-            groqConversationHistory.push({ role: 'assistant', content: markIncompleteResponse(cleanedResponse, 'length') });
-            saveConversationTurn(transcription, cleanedResponse, { status: 'incomplete', reason: 'length' });
+            requestHistory.push({ role: 'assistant', content: markIncompleteResponse(cleanedResponse, 'length') });
+            if (persistConversation) saveConversationTurn(transcription, cleanedResponse, { status: 'incomplete', reason: 'length' });
             sendToRenderer(
                 'update-response',
                 createResponseUpdate(`${cleanedResponse}\n\n_Response stopped because the token limit was reached._`, responseId)
             );
             sendToRenderer('update-status', 'Groq response stopped at the token limit');
-            return true;
+            return returnDetails ? { success: true, text: cleanedResponse, model, status: 'incomplete' } : true;
         }
 
-        groqConversationHistory.push({ role: 'assistant', content: cleanedResponse });
-        saveConversationTurn(transcription, cleanedResponse);
+        requestHistory.push({ role: 'assistant', content: cleanedResponse });
+        if (persistConversation) saveConversationTurn(transcription, cleanedResponse);
         console.log(`Groq response completed (${model})`);
         sendToRenderer('update-status', 'Listening...');
-        return true;
+        return returnDetails ? { success: true, text: cleanedResponse, model, status: 'complete' } : true;
     }
 
     removeUserTurn();
@@ -814,7 +970,7 @@ async function sendGroqImage(base64Data, prompt, requestContext = getHostedReque
     const recordMetric = (keySlot, status, details = {}) =>
         recordGroqMetric({
             requestId,
-            stage: 'vision',
+            stage: 'vision-extraction',
             selectedModel: GROQ_VISION_MODEL,
             actualModel: GROQ_VISION_MODEL,
             keySlot,
@@ -837,7 +993,7 @@ async function sendGroqImage(base64Data, prompt, requestContext = getHostedReque
                 body: JSON.stringify({
                     model: GROQ_VISION_MODEL,
                     messages: [
-                        { role: 'system', content: currentSystemPrompt || 'You are a helpful assistant.' },
+                        { role: 'system', content: VISION_EXTRACTION_SYSTEM_PROMPT },
                         {
                             role: 'user',
                             content: [
@@ -847,6 +1003,7 @@ async function sendGroqImage(base64Data, prompt, requestContext = getHostedReque
                         },
                     ],
                     ...getGroqVisionRequestOptions(),
+                    response_format: { type: 'json_object' },
                 }),
                 signal: requestContext.signal,
             });
@@ -866,7 +1023,14 @@ async function sendGroqImage(base64Data, prompt, requestContext = getHostedReque
             const text = body.choices?.[0]?.message?.content?.trim();
             if (!text) {
                 recordMetric(keyIndex + 1, 'empty-response', { rateLimits });
-                return { success: false, error: 'Groq Vision returned an empty response' };
+                return { success: false, error: 'Groq Vision extraction returned an empty response' };
+            }
+            let extraction;
+            try {
+                extraction = parseVisionExtraction(text);
+            } catch (error) {
+                recordMetric(keyIndex + 1, 'invalid-extraction', { rateLimits, usage: body.usage || null });
+                return { success: false, error: error.message };
             }
             groqKeyActivation.activate(groqApiKeys[keyIndex], keyActivationRequest);
             recordMetric(keyIndex + 1, 'success', {
@@ -874,8 +1038,7 @@ async function sendGroqImage(base64Data, prompt, requestContext = getHostedReque
                 rateLimits,
                 usage: body.usage || null,
             });
-            sendToRenderer('new-response', createResponsePayload(text));
-            return { success: true, text, model: GROQ_VISION_MODEL };
+            return { success: true, extraction, text: JSON.stringify(extraction), model: GROQ_VISION_MODEL };
         }
 
         const error = readGroqError(await response.text().catch(() => ''));
@@ -1245,13 +1408,7 @@ async function startMacOSAudioCapture(geminiSessionRef) {
 
             const monoChunk = CHANNELS === 2 ? convertStereoToMono(chunk) : chunk;
 
-            if (currentProviderMode === 'cloud') {
-                sendCloudAudio(monoChunk);
-            } else if (currentProviderMode === 'local') {
-                if (speechCaptureEnabled) getLocalAi().processLocalAudio(monoChunk);
-            } else {
-                processHostedPcmBuffer('system', monoChunk);
-            }
+            processIncomingPcmBuffer('system', monoChunk);
 
             if (process.env.DEBUG_AUDIO) {
                 console.log(`Processed audio chunk: ${chunk.length} bytes`);
@@ -1424,7 +1581,9 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
             tpmLimit: null,
         };
         configureHostedAudio(prefs.audioMode);
-        speechCaptureEnabled = prefs.speechCaptureMode !== 'toggle';
+        speechCaptureMode = prefs.speechCaptureMode;
+        speechCaptureEnabled = speechCaptureMode === 'always';
+        clearManualAudioSession();
         initializeNewSession(selectedProfile.id, currentSystemPrompt, { profileName: selectedProfile.name, language: language.locale });
         sessionParams = null;
         geminiSessionRef.current = null;
@@ -1440,7 +1599,11 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
     ipcMain.handle('initialize-local', async (event, ollamaHost, ollamaModel, whisperModel, profile, customPrompt, language = 'en-US') => {
         currentProviderMode = 'local';
         currentGroqSession = null;
-        speechCaptureEnabled = getPreferences().speechCaptureMode !== 'toggle';
+        const prefs = getPreferences();
+        speechCaptureMode = prefs.speechCaptureMode;
+        hostedAudioSource = prefs.audioMode === 'mic_only' ? 'microphone' : 'system';
+        speechCaptureEnabled = speechCaptureMode === 'always';
+        clearManualAudioSession();
         const selectedProfile = getAiProfileSnapshot(profile);
         const languageConfig = getLanguageConfig(language);
         currentSystemPrompt = getSystemPrompt(selectedProfile, '', false, [], languageConfig.locale);
@@ -1459,54 +1622,22 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
     });
 
     ipcMain.handle('send-audio-content', async (event, { data, mimeType }) => {
-        if (!speechCaptureEnabled) return { success: true, ignored: true };
-        if (currentProviderMode === 'cloud') {
-            try {
-                const pcmBuffer = Buffer.from(data, 'base64');
-                sendCloudAudio(pcmBuffer);
-                return { success: true };
-            } catch (error) {
-                console.error('Error sending cloud audio:', error);
-                return { success: false, error: error.message };
-            }
+        try {
+            return processIncomingAudioContent('system', data, mimeType);
+        } catch (error) {
+            console.error('Error processing system audio:', error);
+            return { success: false, error: error.message };
         }
-        if (currentProviderMode === 'local') {
-            try {
-                const pcmBuffer = Buffer.from(data, 'base64');
-                getLocalAi().processLocalAudio(pcmBuffer);
-                return { success: true };
-            } catch (error) {
-                console.error('Error sending local audio:', error);
-                return { success: false, error: error.message };
-            }
-        }
-        return processHostedAudioChunk('system', data, mimeType);
     });
 
     // Handle microphone audio on a separate channel
     ipcMain.handle('send-mic-audio-content', async (event, { data, mimeType }) => {
-        if (!speechCaptureEnabled) return { success: true, ignored: true };
-        if (currentProviderMode === 'cloud') {
-            try {
-                const pcmBuffer = Buffer.from(data, 'base64');
-                sendCloudAudio(pcmBuffer);
-                return { success: true };
-            } catch (error) {
-                console.error('Error sending cloud mic audio:', error);
-                return { success: false, error: error.message };
-            }
+        try {
+            return processIncomingAudioContent('microphone', data, mimeType);
+        } catch (error) {
+            console.error('Error processing microphone audio:', error);
+            return { success: false, error: error.message };
         }
-        if (currentProviderMode === 'local') {
-            try {
-                const pcmBuffer = Buffer.from(data, 'base64');
-                getLocalAi().processLocalAudio(pcmBuffer);
-                return { success: true };
-            } catch (error) {
-                console.error('Error sending local mic audio:', error);
-                return { success: false, error: error.message };
-            }
-        }
-        return processHostedAudioChunk('microphone', data, mimeType);
     });
 
     ipcMain.handle('list-local-vision-models', async () => {
@@ -1539,25 +1670,82 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
             const prefs = getPreferences();
             if (prefs.visionProvider === 'disabled') return { success: false, error: 'Screenshot analysis is disabled in Settings' };
 
-            const visionPrompt = buildVisionPrompt(prefs.screenAnalysisPrompt, prompt, conversationHistory, prefs.visionIncludeConversation);
-
             process.stdout.write('!');
             isVisionRequestActive = true;
             ownsVisionLock = true;
             let result;
+            let historyPrompt;
             if (prefs.visionProvider === 'groq') {
-                result = await sendGroqImage(data, visionPrompt);
+                const requestContext = getHostedRequestContext();
+                if (!currentSystemPrompt || !requestContext) {
+                    return { success: false, error: 'Start an assistant session before using Quality screenshot analysis' };
+                }
+                const extractionPrompt = buildVisionExtractionPrompt(prefs.screenAnalysisPrompt, prompt);
+                historyPrompt = extractionPrompt;
+                sendToRenderer('update-status', 'Reading screen...');
+                const extractionResult = await sendGroqImage(data, extractionPrompt, requestContext);
+                if (!extractionResult.success) return extractionResult;
+                if (!isHostedRequestActive(requestContext)) return { success: false, aborted: true };
+
+                sendToRenderer('update-status', 'Generating answer...');
+                const answerTurn = buildVisionAnswerTurn(extractionResult.extraction, prompt);
+                const screenshotTextHistory = prefs.visionIncludeConversation
+                    ? conversationHistory
+                          .filter(turn => turn?.transcription?.trim() && turn?.ai_response?.trim())
+                          .slice(-2)
+                          .flatMap(turn => [
+                              { role: 'user', content: turn.transcription.trim() },
+                              { role: 'assistant', content: turn.ai_response.trim() },
+                          ])
+                    : [];
+                const answerResult = await queueGroqTextRequest(answerTurn, requestContext, {
+                    systemPrompt: buildVisionAnswerSystemPrompt(currentGroqSession?.systemPrompt || currentSystemPrompt),
+                    history: screenshotTextHistory,
+                    behavior: {
+                        conversationContextEnabled: prefs.visionIncludeConversation,
+                        conversationContextCount: prefs.visionIncludeConversation ? 2 : 0,
+                    },
+                    model: currentGroqSession?.model || prefs.hostedTextModel,
+                    persistConversation: false,
+                    returnDetails: true,
+                    responseSourceText: '',
+                    stage: 'vision-response',
+                    reasoningEffort: 'medium',
+                });
+                if (!answerResult?.success) {
+                    return {
+                        success: false,
+                        aborted: !isHostedRequestActive(requestContext),
+                        error: 'The screen was read, but the final text response failed',
+                    };
+                }
+                result = {
+                    success: true,
+                    text: answerResult.text,
+                    model: answerResult.model,
+                    visionModel: extractionResult.model,
+                    pipeline: 'extract-then-response',
+                };
             } else if (prefs.visionProvider === 'ollama') {
+                const visionPrompt = buildVisionPrompt(prefs.screenAnalysisPrompt, prompt, conversationHistory, prefs.visionIncludeConversation);
+                historyPrompt = visionPrompt;
                 result = await getLocalAi().sendLocalImage(data, visionPrompt, {
                     host: prefs.ollamaHost,
                     model: prefs.ollamaVisionModel,
-                    systemPrompt: currentSystemPrompt,
+                    systemPrompt: buildVisionSystemPrompt(currentSystemPrompt),
                 });
             } else {
                 return { success: false, error: `Unsupported Vision provider: ${prefs.visionProvider}` };
             }
 
-            if (result.success) saveScreenAnalysis(visionPrompt, result.text, result.model, prefs.visionProvider);
+            if (result.success) {
+                saveScreenAnalysis(historyPrompt, result.text, result.model, prefs.visionProvider, {
+                    pipeline: result.pipeline || 'direct',
+                    visionModel: result.visionModel,
+                    responseModel: result.pipeline === 'extract-then-response' ? result.model : undefined,
+                    screenshotBuffer: prefs.saveScreenshotsInHistory ? buffer : null,
+                });
+            }
             return result;
         } catch (error) {
             console.error('Error sending image:', error);
@@ -1635,17 +1823,16 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
         return { success: true };
     });
 
-    ipcMain.handle('reset-speech-capture', () => {
-        speechCaptureEnabled = true;
-        if (currentProviderMode === 'local') getLocalAi().resetLocalAudio();
-        else hostedAudioSegmenter?.reset();
-        return { success: true };
+    ipcMain.handle('start-speech-capture', (event, source) => {
+        return startManualSpeechCapture(source);
     });
 
-    ipcMain.handle('flush-speech-capture', () => {
-        speechCaptureEnabled = false;
-        const queued = currentProviderMode === 'local' ? getLocalAi().flushLocalAudio() : Boolean(hostedAudioSegmenter?.flush());
-        return { success: true, queued };
+    ipcMain.handle('finish-speech-capture', async (event, source) => {
+        return finalizeManualSpeechCapture(source);
+    });
+
+    ipcMain.handle('retry-speech-capture', async (event, source) => {
+        return finalizeManualSpeechCapture(source, true);
     });
 
     ipcMain.handle('close-session', async event => {
@@ -1655,11 +1842,13 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
             stopMacOSAudioCapture();
             hostedAudioSegmenter?.reset();
             hostedAudioSegmenter = null;
+            clearManualAudioSession();
             currentGroqSession = null;
             pendingUtteranceIds.clear();
             hostedAudioQueue = Promise.resolve();
             groqTextQueue = Promise.resolve();
             speechCaptureEnabled = true;
+            speechCaptureMode = 'toggle';
 
             if (currentProviderMode === 'cloud') {
                 closeCloud();

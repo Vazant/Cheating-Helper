@@ -339,25 +339,6 @@ function processLocalAudio(monoChunk24k) {
     }
 }
 
-function resetLocalAudio() {
-    isSpeaking = false;
-    speechBuffers = [];
-    silenceFrameCount = 0;
-    speechFrameCount = 0;
-    resampleRemainder = Buffer.alloc(0);
-}
-
-function flushLocalAudio() {
-    if (!isSpeaking || !speechBuffers.length) {
-        resetLocalAudio();
-        return false;
-    }
-    const audioData = Buffer.concat(speechBuffers);
-    resetLocalAudio();
-    handleSpeechEnd(audioData);
-    return audioData.length >= 16000;
-}
-
 function closeLocalSession() {
     console.log('[LocalAI] Closing local session');
     isLocalActive = false;
@@ -390,6 +371,17 @@ async function sendLocalText(text) {
     } catch (error) {
         return { success: false, error: error.message };
     }
+}
+
+async function transcribeLocalChunk(pcm16kBuffer) {
+    if (!isLocalActive) return null;
+    if (!Buffer.isBuffer(pcm16kBuffer) || pcm16kBuffer.length < 16000) return null;
+    return transcribeAudio(pcm16kBuffer);
+}
+
+async function sendLocalTranscript(text) {
+    if (!isLocalActive || !text?.trim()) throw new Error('No active local session or transcript');
+    return sendToOllama(text.trim());
 }
 
 async function listLocalVisionModels(ollamaHost) {
@@ -462,11 +454,11 @@ async function sendLocalImage(base64Data, prompt, { host, model, systemPrompt } 
 module.exports = {
     initializeLocalSession,
     processLocalAudio,
-    resetLocalAudio,
-    flushLocalAudio,
     closeLocalSession,
     isLocalSessionActive,
     sendLocalText,
+    transcribeLocalChunk,
+    sendLocalTranscript,
     sendLocalImage,
     listLocalVisionModels,
 };

@@ -3,7 +3,7 @@ import { unifiedPageStyles } from './sharedPageStyles.js';
 
 const LENGTHS = {
     auto: ['Automatic', 'Adapts to the question: short for simple topics, fuller for technical explanations.'],
-    concise: ['Short', 'About 4–6 sentences with only the essential mechanism and conclusion.'],
+    concise: ['Short', 'A compact, self-contained answer with enough reasoning for the selected profile.'],
     standard: ['Full', 'About 10–18 sentences with an example, pitfalls, and trade-offs.'],
     detailed: ['Deep', 'About 18–30 sentences for internals, alternatives, and production details.'],
 };
@@ -115,6 +115,9 @@ export class AICustomizeView extends LitElement {
             }
             textarea.rules {
                 min-height: 220px;
+            }
+            textarea.response-style {
+                min-height: 110px;
             }
             textarea.preview {
                 min-height: 280px;
@@ -353,6 +356,7 @@ export class AICustomizeView extends LitElement {
         }
         const builtIns = this._profiles.filter(profile => profile.isBuiltin);
         const custom = this._profiles.filter(profile => !profile.isBuiltin);
+        const duplicateNames = new Set(custom.filter(profile => custom.filter(item => item.name === profile.name).length > 1).map(profile => profile.name));
         const p = this._draft.prompt;
         return html` <div class="unified-page">
             <div class="unified-wrap">
@@ -363,10 +367,19 @@ export class AICustomizeView extends LitElement {
                 <section class="surface profile-form">
                     <div class="section">
                         <div class="form-group">
-                            <label class="form-label">Profile for next session</label
-                            ><select class="control" .value=${this._draft.id} @change=${e => this._select(e.target.value)}>
-                                <optgroup label="Built-in">${builtIns.map(x => html`<option value=${x.id}>${x.name}</option>`)}</optgroup>
-                                <optgroup label="My profiles">${custom.map(x => html`<option value=${x.id}>${x.name}</option>`)}</optgroup>
+                            <label class="form-label" for="session-profile">Profile for next session</label
+                            ><select id="session-profile" class="control" @change=${e => this._select(e.target.value)}>
+                                <optgroup label="Built-in">
+                                    ${builtIns.map(x => html`<option value=${x.id} ?selected=${this._draft.id === x.id}>${x.name}</option>`)}
+                                </optgroup>
+                                <optgroup label="My profiles">
+                                    ${custom.map(
+                                        x =>
+                                            html`<option value=${x.id} ?selected=${this._draft.id === x.id}>
+                                                ${x.name}${duplicateNames.has(x.name) ? ` — ${x.id}` : ''}
+                                            </option>`
+                                    )}
+                                </optgroup>
                             </select>
                         </div>
                         <div class="toolbar">
@@ -410,7 +423,13 @@ export class AICustomizeView extends LitElement {
                         </div>
                         ${this._textareaField('Assistant role', p.persona, value => this._promptField('persona', value), 'role', 'Example: Act as a live interview assistant and write the exact words the candidate can say aloud.')}
                         ${this._textareaField('Answer instructions', p.answerRules, value => this._promptField('answerRules', value), 'rules', 'Example: explain relevant mechanisms, give a practical example, mention pitfalls, and never invent personal experience.')}
-                        ${this._inputField('Response style', p.responseStyle, value => this._promptField('responseStyle', value), 'Example: Natural, direct, senior-level speech with short paragraphs.')}
+                        ${this._textareaField(
+                            'Response style',
+                            p.responseStyle,
+                            value => this._promptField('responseStyle', value),
+                            'response-style',
+                            'Example: Natural, direct, senior-level speech with short paragraphs.'
+                        )}
                     </div>
 
                     <div class="section">

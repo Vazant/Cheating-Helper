@@ -171,13 +171,19 @@ export class HistoryView extends LitElement {
                 justify-content: flex-start;
             }
 
+            .message,
+            .message *,
+            .context-value,
+            .context-value * {
+                user-select: text;
+                cursor: text;
+            }
+
             .message {
                 max-width: 75%;
                 border-radius: 16px;
                 padding: 8px 12px;
                 word-break: break-word;
-                user-select: text;
-                cursor: text;
                 font-size: var(--font-size-sm);
                 line-height: 1.45;
             }
@@ -187,9 +193,61 @@ export class HistoryView extends LitElement {
             }
 
             .message-meta {
+                display: flex;
+                align-items: center;
+                gap: 6px;
                 font-size: 10px;
                 margin-top: 4px;
                 opacity: 0.5;
+            }
+
+            .copy-btn {
+                border: 0;
+                background: none;
+                color: inherit;
+                padding: 0;
+                font: inherit;
+                cursor: pointer;
+                text-decoration: underline;
+            }
+
+            .screenshot-preview {
+                display: block;
+                width: 100%;
+                max-height: 260px;
+                object-fit: contain;
+                margin-bottom: 8px;
+                border: 1px solid var(--border);
+                border-radius: var(--radius-sm);
+                cursor: zoom-in;
+            }
+
+            .screenshot-button {
+                display: block;
+                width: 100%;
+                padding: 0;
+                border: 0;
+                background: none;
+                cursor: zoom-in;
+            }
+
+            .image-overlay {
+                position: fixed;
+                inset: 0;
+                z-index: 10000;
+                display: grid;
+                place-items: center;
+                padding: var(--space-lg);
+                border: 0;
+                background: rgba(0, 0, 0, 0.82);
+                cursor: zoom-out;
+            }
+
+            .image-overlay img {
+                max-width: 100%;
+                max-height: 100%;
+                object-fit: contain;
+                cursor: zoom-out;
             }
 
             .message-row.user .message {
@@ -265,6 +323,8 @@ export class HistoryView extends LitElement {
         loading: { type: Boolean },
         activeTab: { type: String },
         searchQuery: { type: String },
+        copyStatus: { type: String },
+        expandedImage: { type: String },
     };
 
     constructor() {
@@ -275,6 +335,8 @@ export class HistoryView extends LitElement {
         this.loading = true;
         this.activeTab = 'conversation';
         this.searchQuery = '';
+        this.copyStatus = '';
+        this.expandedImage = '';
         this.loadSessions();
     }
 
@@ -386,6 +448,18 @@ export class HistoryView extends LitElement {
         return messages;
     }
 
+    async copyMessage(text, key) {
+        try {
+            await navigator.clipboard.writeText(text);
+            this.copyStatus = key;
+        } catch {
+            this.copyStatus = `error:${key}`;
+        }
+        setTimeout(() => {
+            if (this.copyStatus.endsWith(key)) this.copyStatus = '';
+        }, 1500);
+    }
+
     renderTabContent() {
         if (!this.selectedSession) return html`<div class="empty">Select a session.</div>`;
 
@@ -393,13 +467,20 @@ export class HistoryView extends LitElement {
             const messages = this.collectConversation(this.selectedSession);
             if (!messages.length) return html`<div class="empty">No conversation data.</div>`;
             return messages.map(
-                msg => html`
+                (msg, index) => html`
                     <div class="message-row ${msg.type}">
                         <div class="message">
                             <div class="message-body">${msg.content}</div>
                             <div class="message-meta">
                                 ${this.formatTime(msg.timestamp)}
                                 ${msg.type === 'ai' && msg.status !== 'complete' ? ` · ${msg.status}${msg.reason ? ` (${msg.reason})` : ''}` : ''}
+                                <button class="copy-btn" @click=${() => this.copyMessage(msg.content, `conversation-${index}`)}>
+                                    ${this.copyStatus === `conversation-${index}`
+                                        ? 'Copied'
+                                        : this.copyStatus === `error:conversation-${index}`
+                                          ? 'Copy failed'
+                                          : 'Copy'}
+                                </button>
                             </div>
                         </div>
                     </div>
@@ -411,11 +492,31 @@ export class HistoryView extends LitElement {
             const screen = this.selectedSession.screenAnalysisHistory || [];
             if (!screen.length) return html`<div class="empty">No screen analysis data.</div>`;
             return screen.map(
-                entry => html`
+                (entry, index) => html`
                     <div class="message-row screen">
                         <div class="message">
+                            ${entry.imageData
+                                ? html`<button
+                                      class="screenshot-button"
+                                      aria-label="Enlarge analyzed screenshot"
+                                      @click=${() => {
+                                          this.expandedImage = entry.imageData;
+                                      }}
+                                  >
+                                      <img class="screenshot-preview" src=${entry.imageData} alt="Analyzed screenshot" />
+                                  </button>`
+                                : ''}
                             <div class="message-body">${entry.response || ''}</div>
-                            <div class="message-meta">${this.formatTime(entry.timestamp)}</div>
+                            <div class="message-meta">
+                                ${this.formatTime(entry.timestamp)}
+                                <button class="copy-btn" @click=${() => this.copyMessage(entry.response || '', `screen-${index}`)}>
+                                    ${this.copyStatus === `screen-${index}`
+                                        ? 'Copied'
+                                        : this.copyStatus === `error:screen-${index}`
+                                          ? 'Copy failed'
+                                          : 'Copy'}
+                                </button>
+                            </div>
                         </div>
                     </div>
                 `
@@ -558,6 +659,11 @@ export class HistoryView extends LitElement {
             <div class="unified-page">
                 <div class="unified-wrap">${this.selectedSession ? this.renderDetailView() : this.renderListView()}</div>
             </div>
+            ${this.expandedImage
+                ? html`<button class="image-overlay" aria-label="Close screenshot" @click=${() => (this.expandedImage = '')}>
+                      <img src=${this.expandedImage} alt="Analyzed screenshot enlarged" />
+                  </button>`
+                : ''}
         `;
     }
 }

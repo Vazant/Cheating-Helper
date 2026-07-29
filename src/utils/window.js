@@ -79,6 +79,9 @@ function createWindow(sendToRenderer, geminiSessionRef) {
             const savedKeybinds = storage.getKeybinds();
             if (savedKeybinds) {
                 keybinds = { ...defaultKeybinds, ...savedKeybinds };
+                if (savedKeybinds.toggleSpeechCapture && !savedKeybinds.toggleSystemAudio) {
+                    keybinds.toggleSystemAudio = savedKeybinds.toggleSpeechCapture;
+                }
             }
 
             updateGlobalShortcuts(keybinds, mainWindow, sendToRenderer, geminiSessionRef);
@@ -105,7 +108,8 @@ function getDefaultKeybinds() {
         scrollUp: isMac ? 'Cmd+Shift+Up' : 'Ctrl+Shift+Up',
         scrollDown: isMac ? 'Cmd+Shift+Down' : 'Ctrl+Shift+Down',
         emergencyErase: isMac ? 'Cmd+Shift+E' : 'Ctrl+Shift+E',
-        toggleSpeechCapture: 'F8',
+        toggleSystemAudio: 'F8',
+        toggleMicrophone: 'F9',
     };
 }
 
@@ -119,19 +123,24 @@ function updateGlobalShortcuts(keybinds, mainWindow, sendToRenderer, geminiSessi
     const { width, height } = primaryDisplay.workAreaSize;
     const moveIncrement = Math.floor(Math.min(width, height) * 0.1);
 
-    if (keybinds.toggleSpeechCapture) {
+    for (const [action, source] of [
+        ['toggleSystemAudio', 'system'],
+        ['toggleMicrophone', 'microphone'],
+    ]) {
+        const accelerator = keybinds[action];
+        if (!accelerator) continue;
         try {
-            const registered = globalShortcut.register(keybinds.toggleSpeechCapture, () => sendToRenderer('toggle-speech-capture'));
+            const registered = globalShortcut.register(accelerator, () => sendToRenderer('toggle-speech-capture', { source }));
             if (!registered) {
                 sendToRenderer('shortcut-registration-status', {
-                    action: 'toggleSpeechCapture',
+                    action,
                     success: false,
-                    error: `Could not register ${keybinds.toggleSpeechCapture}. Choose another shortcut.`,
+                    error: `Could not register ${accelerator}. Choose another shortcut.`,
                 });
             }
         } catch (error) {
-            console.error(`Failed to register toggleSpeechCapture (${keybinds.toggleSpeechCapture}):`, error);
-            sendToRenderer('shortcut-registration-status', { action: 'toggleSpeechCapture', success: false, error: error.message });
+            console.error(`Failed to register ${action} (${accelerator}):`, error);
+            sendToRenderer('shortcut-registration-status', { action, success: false, error: error.message });
         }
     }
 
@@ -312,12 +321,6 @@ function setupWindowIpcHandlers(mainWindow, sendToRenderer, geminiSessionRef) {
         }
     });
 
-    ipcMain.on('update-keybinds', (event, newKeybinds) => {
-        if (!mainWindow.isDestroyed()) {
-            updateGlobalShortcuts(newKeybinds, mainWindow, sendToRenderer, geminiSessionRef);
-        }
-    });
-
     ipcMain.handle('toggle-window-visibility', async event => {
         try {
             if (mainWindow.isDestroyed()) {
@@ -335,7 +338,6 @@ function setupWindowIpcHandlers(mainWindow, sendToRenderer, geminiSessionRef) {
             return { success: false, error: error.message };
         }
     });
-
 }
 
 module.exports = {

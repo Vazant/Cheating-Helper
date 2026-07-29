@@ -2,13 +2,36 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { DEFAULT_GROQ_MODEL, GROQ_MODELS } = require('./utils/groq');
-const { GROQ_VISION_MODEL, DEFAULT_OLLAMA_VISION_MODEL, DEFAULT_SCREEN_ANALYSIS_PROMPT, normalizeVisionProvider } = require('./utils/vision');
+const {
+    GROQ_VISION_MODEL,
+    DEFAULT_OLLAMA_VISION_MODEL,
+    LEGACY_DEFAULT_SCREEN_ANALYSIS_PROMPT,
+    PREVIOUS_DEFAULT_SCREEN_ANALYSIS_PROMPT,
+    DEFAULT_SCREEN_ANALYSIS_PROMPT,
+    normalizeVisionProvider,
+} = require('./utils/vision');
 const { PROFILE_SCHEMA_VERSION, SENIOR_JAVA_PROFILE, importProfile, normalizeProfile, normalizeUserProfiles } = require('./utils/aiProfiles');
 const { getAvailableProfiles } = require('./utils/prompts');
 const EPAM_HR_PROFILE_V2 = normalizeProfile(require('../profiles/epam-hr-call.json').profile);
 
 const CONFIG_VERSION = 1;
 const HOSTED_TEXT_MODELS = new Set(GROQ_MODELS);
+const KEYBIND_ACTIONS = new Set([
+    'moveUp',
+    'moveDown',
+    'moveLeft',
+    'moveRight',
+    'toggleVisibility',
+    'toggleClickThrough',
+    'nextStep',
+    'previousResponse',
+    'nextResponse',
+    'scrollUp',
+    'scrollDown',
+    'emergencyErase',
+    'toggleSystemAudio',
+    'toggleMicrophone',
+]);
 
 function normalizeHostedTextModel(model) {
     if (HOSTED_TEXT_MODELS.has(model)) return model;
@@ -57,7 +80,17 @@ function normalizeAudioMode(value) {
 }
 
 function normalizeSpeechCaptureMode(value) {
-    return value === 'toggle' ? 'toggle' : 'always';
+    return value === 'always' ? 'always' : 'toggle';
+}
+
+function normalizeFontSize(value) {
+    const numeric = Number(value);
+    return Number.isFinite(numeric) ? Math.min(32, Math.max(12, Math.round(numeric))) : 20;
+}
+
+function normalizeBackgroundTransparency(value) {
+    const numeric = Number(value);
+    return Number.isFinite(numeric) ? Math.min(1, Math.max(0, numeric)) : 0.8;
 }
 
 const DEFAULT_PREFERENCES = {
@@ -69,8 +102,10 @@ const DEFAULT_PREFERENCES = {
     selectedImageQuality: 'medium',
     advancedMode: false,
     audioMode: 'speaker_only',
-    speechCaptureMode: 'always',
-    fontSize: 'medium',
+    speechCaptureMode: 'toggle',
+    speechCaptureModeVersion: 2,
+    microphoneDeviceId: '',
+    fontSize: 20,
     backgroundTransparency: 0.8,
     googleSearchEnabled: false,
     hostedTextModel: DEFAULT_GROQ_MODEL,
@@ -79,6 +114,7 @@ const DEFAULT_PREFERENCES = {
     ollamaVisionModel: DEFAULT_OLLAMA_VISION_MODEL,
     screenAnalysisPrompt: DEFAULT_SCREEN_ANALYSIS_PROMPT,
     visionIncludeConversation: true,
+    saveScreenshotsInHistory: false,
     ollamaHost: 'http://127.0.0.1:11434',
     ollamaModel: 'llama3.1',
     whisperModel: 'Xenova/whisper-small',
@@ -87,7 +123,16 @@ const DEFAULT_PREFERENCES = {
 const DEFAULT_PROFILE_STORE = {
     schemaVersion: PROFILE_SCHEMA_VERSION,
     userProfiles: [SENIOR_JAVA_PROFILE],
-    migrations: { customPromptV1: { done: false, profileId: null }, epamHrProfileV2: { done: false, updated: false } },
+    migrations: {
+        customPromptV1: { done: false, profileId: null },
+        epamHrProfileV2: { done: false, updated: false },
+        epamHrDuplicateCleanupV1: { done: false, removed: false },
+        seniorJavaInterviewV2: { done: false, updated: false },
+        seniorJavaInterviewV3: { done: false, updated: false },
+        seniorJavaInterviewV4: { done: false, updated: false },
+        seniorJavaInterviewV5: { done: false, updated: false },
+        seniorJavaInterviewV6: { done: false, updated: false },
+    },
 };
 
 const DEFAULT_KEYBINDS = null; // null means use system defaults
@@ -150,41 +195,46 @@ function readJsonFile(filePath, defaultValue) {
         }
     } catch (error) {
         console.warn(`Error reading ${filePath}:`, error.message);
+        const backupPath = `${filePath}.bak`;
+        try {
+            if (fs.existsSync(backupPath)) {
+                console.warn(`Recovering ${filePath} from its last valid backup`);
+                return JSON.parse(fs.readFileSync(backupPath, 'utf8'));
+            }
+        } catch (backupError) {
+            console.warn(`Error reading backup ${backupPath}:`, backupError.message);
+        }
     }
     return defaultValue;
 }
 
 // Helper to write JSON file safely
 function writeJsonFile(filePath, data) {
+    const dir = path.dirname(filePath);
+    const temporaryPath = `${filePath}.${process.pid}.tmp`;
     try {
-        const dir = path.dirname(filePath);
         if (!fs.existsSync(dir)) {
             fs.mkdirSync(dir, { recursive: true });
         }
-        fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf8');
+        const serialized = JSON.stringify(data, null, 2);
+        fs.writeFileSync(temporaryPath, serialized, 'utf8');
+        JSON.parse(fs.readFileSync(temporaryPath, 'utf8'));
+        fs.renameSync(temporaryPath, filePath);
+        JSON.parse(fs.readFileSync(filePath, 'utf8'));
+        fs.copyFileSync(filePath, `${filePath}.bak`);
         return true;
     } catch (error) {
+        try {
+            if (fs.existsSync(temporaryPath)) fs.unlinkSync(temporaryPath);
+        } catch {
+            // Preserve the original write error.
+        }
         console.error(`Error writing ${filePath}:`, error.message);
-        return false;
+        throw error;
     }
 }
 
-// Check if we need to reset (no configVersion or wrong version)
-function needsReset() {
-    const configPath = getConfigPath();
-    if (!fs.existsSync(configPath)) {
-        return true;
-    }
-
-    try {
-        const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-        return !config.configVersion || config.configVersion !== CONFIG_VERSION;
-    } catch {
-        return true;
-    }
-}
-
-// Wipe and reinitialize the config directory
+// Wipe and reinitialize only after the user explicitly chooses Clear All Data.
 function resetConfigDir() {
     const configDir = getConfigDir();
 
@@ -210,14 +260,26 @@ function resetConfigDir() {
 
 // Initialize storage - call this on app startup
 function initializeStorage() {
-    if (needsReset()) {
-        resetConfigDir();
-    } else {
-        // Ensure history directory exists
-        const historyDir = getHistoryDir();
-        if (!fs.existsSync(historyDir)) {
-            fs.mkdirSync(historyDir, { recursive: true });
-        }
+    fs.mkdirSync(getConfigDir(), { recursive: true });
+    fs.mkdirSync(getHistoryDir(), { recursive: true });
+    if (!fs.existsSync(getConfigPath())) writeJsonFile(getConfigPath(), DEFAULT_CONFIG);
+    else setConfig({ configVersion: CONFIG_VERSION });
+    if (!fs.existsSync(getCredentialsPath())) writeJsonFile(getCredentialsPath(), DEFAULT_CREDENTIALS);
+    if (!fs.existsSync(getPreferencesPath())) writeJsonFile(getPreferencesPath(), DEFAULT_PREFERENCES);
+    if (!fs.existsSync(getProfilesPath())) writeJsonFile(getProfilesPath(), DEFAULT_PROFILE_STORE);
+
+    const savedPreferences = readJsonFile(getPreferencesPath(), {});
+    if (savedPreferences.speechCaptureModeVersion !== 2) {
+        setPreferences({ speechCaptureMode: 'toggle', speechCaptureModeVersion: 2 });
+    }
+    const savedKeybinds = getKeybinds();
+    if (savedKeybinds?.toggleSpeechCapture) {
+        const { toggleSpeechCapture, ...currentKeybinds } = savedKeybinds;
+        setKeybinds({
+            ...currentKeybinds,
+            toggleSystemAudio: currentKeybinds.toggleSystemAudio || toggleSpeechCapture,
+            toggleMicrophone: currentKeybinds.toggleMicrophone || 'F9',
+        });
     }
 
     const credentials = getCredentials();
@@ -230,6 +292,12 @@ function initializeStorage() {
     persistPreferences(getPreferences());
     migrateLegacyCustomPrompt();
     migrateEpamHrProfileV2();
+    migrateEpamHrDuplicateCleanupV1();
+    migrateSeniorJavaInterviewV2();
+    migrateSeniorJavaInterviewV3();
+    migrateSeniorJavaInterviewV4();
+    migrateSeniorJavaInterviewV5();
+    migrateSeniorJavaInterviewV6();
 }
 
 // ============ CONFIG ============
@@ -314,6 +382,9 @@ function getPreferences() {
         ...saved,
         audioMode: normalizeAudioMode(saved.audioMode),
         speechCaptureMode: normalizeSpeechCaptureMode(saved.speechCaptureMode),
+        microphoneDeviceId: typeof saved.microphoneDeviceId === 'string' ? saved.microphoneDeviceId : '',
+        fontSize: normalizeFontSize(saved.fontSize),
+        backgroundTransparency: normalizeBackgroundTransparency(saved.backgroundTransparency),
         hostedTextModel: normalizeHostedTextModel(saved.hostedTextModel),
         visionProvider: normalizeVisionProvider(saved.visionProvider),
         groqVisionModel: GROQ_VISION_MODEL,
@@ -323,7 +394,9 @@ function getPreferences() {
                 : DEFAULT_OLLAMA_VISION_MODEL,
         screenAnalysisPrompt:
             typeof saved.screenAnalysisPrompt === 'string' && saved.screenAnalysisPrompt.trim()
-                ? saved.screenAnalysisPrompt
+                ? [LEGACY_DEFAULT_SCREEN_ANALYSIS_PROMPT, PREVIOUS_DEFAULT_SCREEN_ANALYSIS_PROMPT].includes(saved.screenAnalysisPrompt)
+                    ? DEFAULT_SCREEN_ANALYSIS_PROMPT
+                    : saved.screenAnalysisPrompt
                 : DEFAULT_SCREEN_ANALYSIS_PROMPT,
         visionIncludeConversation: saved.visionIncludeConversation !== false,
         availableProfiles: listAiProfiles(),
@@ -336,17 +409,24 @@ function persistPreferences(preferences) {
     persisted.visionProvider = normalizeVisionProvider(persisted.visionProvider);
     persisted.audioMode = normalizeAudioMode(persisted.audioMode);
     persisted.speechCaptureMode = normalizeSpeechCaptureMode(persisted.speechCaptureMode);
+    persisted.microphoneDeviceId = typeof persisted.microphoneDeviceId === 'string' ? persisted.microphoneDeviceId : '';
+    persisted.fontSize = normalizeFontSize(persisted.fontSize);
+    persisted.backgroundTransparency = normalizeBackgroundTransparency(persisted.backgroundTransparency);
     persisted.groqVisionModel = GROQ_VISION_MODEL;
     return writeJsonFile(getPreferencesPath(), persisted);
 }
 
 function setPreferences(preferences) {
+    if (!preferences || typeof preferences !== 'object' || Array.isArray(preferences)) throw new Error('Preferences must be an object');
+    const unknownKey = Object.keys(preferences).find(key => !Object.hasOwn(DEFAULT_PREFERENCES, key));
+    if (unknownKey) throw new Error(`Unknown preference "${unknownKey}"`);
     const current = getPreferences();
     const { availableProfiles, ...persistedCurrent } = current;
     return persistPreferences({ ...persistedCurrent, ...preferences });
 }
 
 function updatePreference(key, value) {
+    if (!Object.hasOwn(DEFAULT_PREFERENCES, key)) throw new Error(`Unknown preference "${key}"`);
     const preferences = getPreferences();
     preferences[key] =
         key === 'hostedTextModel'
@@ -357,7 +437,15 @@ function updatePreference(key, value) {
                 ? normalizeAudioMode(value)
                 : key === 'speechCaptureMode'
                   ? normalizeSpeechCaptureMode(value)
-                  : value;
+                  : key === 'microphoneDeviceId'
+                    ? typeof value === 'string'
+                        ? value
+                        : ''
+                    : key === 'fontSize'
+                      ? normalizeFontSize(value)
+                      : key === 'backgroundTransparency'
+                        ? normalizeBackgroundTransparency(value)
+                        : value;
     if (key === 'groqVisionModel') preferences[key] = GROQ_VISION_MODEL;
     return persistPreferences(preferences);
 }
@@ -377,6 +465,30 @@ function getProfileStore() {
             epamHrProfileV2: {
                 done: saved.migrations?.epamHrProfileV2?.done === true,
                 updated: saved.migrations?.epamHrProfileV2?.updated === true,
+            },
+            epamHrDuplicateCleanupV1: {
+                done: saved.migrations?.epamHrDuplicateCleanupV1?.done === true,
+                removed: saved.migrations?.epamHrDuplicateCleanupV1?.removed === true,
+            },
+            seniorJavaInterviewV2: {
+                done: saved.migrations?.seniorJavaInterviewV2?.done === true,
+                updated: saved.migrations?.seniorJavaInterviewV2?.updated === true,
+            },
+            seniorJavaInterviewV3: {
+                done: saved.migrations?.seniorJavaInterviewV3?.done === true,
+                updated: saved.migrations?.seniorJavaInterviewV3?.updated === true,
+            },
+            seniorJavaInterviewV4: {
+                done: saved.migrations?.seniorJavaInterviewV4?.done === true,
+                updated: saved.migrations?.seniorJavaInterviewV4?.updated === true,
+            },
+            seniorJavaInterviewV5: {
+                done: saved.migrations?.seniorJavaInterviewV5?.done === true,
+                updated: saved.migrations?.seniorJavaInterviewV5?.updated === true,
+            },
+            seniorJavaInterviewV6: {
+                done: saved.migrations?.seniorJavaInterviewV6?.done === true,
+                updated: saved.migrations?.seniorJavaInterviewV6?.updated === true,
             },
         },
     };
@@ -501,6 +613,111 @@ function migrateEpamHrProfileV2() {
     setProfileStore(store);
 }
 
+function migrateEpamHrDuplicateCleanupV1() {
+    const store = getProfileStore();
+    if (store.migrations.epamHrDuplicateCleanupV1.done) return;
+    const hasRefinedProfile = store.userProfiles.some(profile => profile.id === 'profile_epam_hr_call-2');
+    const before = store.userProfiles.length;
+    if (hasRefinedProfile) store.userProfiles = store.userProfiles.filter(profile => profile.id !== 'profile_epam_hr_call');
+    store.migrations.epamHrDuplicateCleanupV1 = { done: true, removed: store.userProfiles.length < before };
+    setProfileStore(store);
+}
+
+function migrateSeniorJavaInterviewV2() {
+    const store = getProfileStore();
+    if (store.migrations.seniorJavaInterviewV2.done) return;
+    const index = store.userProfiles.findIndex(profile => profile.id === SENIOR_JAVA_PROFILE.id);
+    if (index >= 0) {
+        const existing = store.userProfiles[index];
+        store.userProfiles[index] = normalizeProfile({
+            ...SENIOR_JAVA_PROFILE,
+            prompt: {
+                ...SENIOR_JAVA_PROFILE.prompt,
+                userContext: existing.prompt.userContext,
+            },
+            behavior: existing.behavior,
+        });
+    }
+    store.migrations.seniorJavaInterviewV2 = { done: true, updated: index >= 0 };
+    setProfileStore(store);
+}
+
+function migrateSeniorJavaInterviewV3() {
+    const store = getProfileStore();
+    if (store.migrations.seniorJavaInterviewV3.done) return;
+    const index = store.userProfiles.findIndex(profile => profile.id === SENIOR_JAVA_PROFILE.id);
+    if (index >= 0) {
+        const existing = store.userProfiles[index];
+        store.userProfiles[index] = normalizeProfile({
+            ...SENIOR_JAVA_PROFILE,
+            prompt: {
+                ...SENIOR_JAVA_PROFILE.prompt,
+                userContext: existing.prompt.userContext,
+            },
+            behavior: existing.behavior,
+        });
+    }
+    store.migrations.seniorJavaInterviewV3 = { done: true, updated: index >= 0 };
+    setProfileStore(store);
+}
+
+function migrateSeniorJavaInterviewV4() {
+    const store = getProfileStore();
+    if (store.migrations.seniorJavaInterviewV4.done) return;
+    const index = store.userProfiles.findIndex(profile => profile.id === SENIOR_JAVA_PROFILE.id);
+    if (index >= 0) {
+        const existing = store.userProfiles[index];
+        store.userProfiles[index] = normalizeProfile({
+            ...SENIOR_JAVA_PROFILE,
+            prompt: {
+                ...SENIOR_JAVA_PROFILE.prompt,
+                userContext: existing.prompt.userContext,
+            },
+            behavior: existing.behavior,
+        });
+    }
+    store.migrations.seniorJavaInterviewV4 = { done: true, updated: index >= 0 };
+    setProfileStore(store);
+}
+
+function migrateSeniorJavaInterviewV5() {
+    const store = getProfileStore();
+    if (store.migrations.seniorJavaInterviewV5.done) return;
+    const index = store.userProfiles.findIndex(profile => profile.id === SENIOR_JAVA_PROFILE.id);
+    if (index >= 0) {
+        const existing = store.userProfiles[index];
+        store.userProfiles[index] = normalizeProfile({
+            ...SENIOR_JAVA_PROFILE,
+            prompt: {
+                ...SENIOR_JAVA_PROFILE.prompt,
+                userContext: existing.prompt.userContext,
+            },
+            behavior: existing.behavior,
+        });
+    }
+    store.migrations.seniorJavaInterviewV5 = { done: true, updated: index >= 0 };
+    setProfileStore(store);
+}
+
+function migrateSeniorJavaInterviewV6() {
+    const store = getProfileStore();
+    if (store.migrations.seniorJavaInterviewV6.done) return;
+    const index = store.userProfiles.findIndex(profile => profile.id === SENIOR_JAVA_PROFILE.id);
+    if (index >= 0) {
+        const existing = store.userProfiles[index];
+        store.userProfiles[index] = normalizeProfile({
+            ...SENIOR_JAVA_PROFILE,
+            prompt: {
+                ...SENIOR_JAVA_PROFILE.prompt,
+                userContext: existing.prompt.userContext,
+            },
+            behavior: existing.behavior,
+        });
+    }
+    store.migrations.seniorJavaInterviewV6 = { done: true, updated: index >= 0 };
+    setProfileStore(store);
+}
+
 // ============ KEYBINDS ============
 
 function getKeybinds() {
@@ -508,7 +725,19 @@ function getKeybinds() {
 }
 
 function setKeybinds(keybinds) {
-    return writeJsonFile(getKeybindsPath(), keybinds);
+    if (keybinds === null) return writeJsonFile(getKeybindsPath(), null);
+    if (!keybinds || typeof keybinds !== 'object' || Array.isArray(keybinds)) throw new Error('Shortcuts must be an object');
+    const entries = Object.entries(keybinds);
+    const unknown = entries.find(([action]) => !KEYBIND_ACTIONS.has(action));
+    if (unknown) throw new Error(`Unknown shortcut action "${unknown[0]}"`);
+    if (entries.some(([, accelerator]) => typeof accelerator !== 'string' || !accelerator.trim() || accelerator.length > 64)) {
+        throw new Error('Every shortcut must be a non-empty accelerator');
+    }
+    const normalized = entries.map(([action, accelerator]) => [action, accelerator.trim()]);
+    if (new Set(normalized.map(([, accelerator]) => accelerator.toLocaleLowerCase())).size !== normalized.length) {
+        throw new Error('Shortcuts must be unique');
+    }
+    return writeJsonFile(getKeybindsPath(), Object.fromEntries(normalized));
 }
 
 // ============ LIMITS (Rate Limiting) ============
@@ -603,6 +832,53 @@ function getSessionPath(sessionId) {
     return path.join(getHistoryDir(), `${sessionId}.json`);
 }
 
+function getSessionAssetDir(sessionId) {
+    if (!/^\d+$/.test(String(sessionId))) throw new Error('Invalid session ID');
+    return path.join(getHistoryDir(), 'assets', String(sessionId));
+}
+
+function saveScreenshotAsset(sessionId, timestamp, buffer) {
+    if (!Buffer.isBuffer(buffer) || !buffer.length) throw new Error('Invalid screenshot data');
+    const assetDir = getSessionAssetDir(sessionId);
+    fs.mkdirSync(assetDir, { recursive: true });
+    const filename = `${Number(timestamp)}.jpg`;
+    const assetPath = path.join(assetDir, filename);
+    fs.writeFileSync(assetPath, buffer);
+    return path.relative(getHistoryDir(), assetPath).replaceAll(path.sep, '/');
+}
+
+function resolveScreenshotAsset(imageRef) {
+    if (typeof imageRef !== 'string' || path.isAbsolute(imageRef) || !imageRef.startsWith('assets/')) return null;
+    const historyRoot = path.resolve(getHistoryDir());
+    const assetPath = path.resolve(historyRoot, imageRef);
+    return assetPath.startsWith(`${historyRoot}${path.sep}`) ? assetPath : null;
+}
+
+function deleteScreenshotAsset(imageRef) {
+    const assetPath = resolveScreenshotAsset(imageRef);
+    if (!assetPath) return false;
+    try {
+        if (fs.existsSync(assetPath)) fs.unlinkSync(assetPath);
+        return true;
+    } catch (error) {
+        console.error('Error deleting screenshot asset:', error.message);
+        return false;
+    }
+}
+
+function hydrateScreenshotAssets(session) {
+    if (!session?.screenAnalysisHistory) return session;
+    return {
+        ...session,
+        screenAnalysisHistory: session.screenAnalysisHistory.map(entry => {
+            if (!entry.imageRef) return entry;
+            const assetPath = resolveScreenshotAsset(entry.imageRef);
+            if (!assetPath || !fs.existsSync(assetPath)) return entry;
+            return { ...entry, imageData: `data:image/jpeg;base64,${fs.readFileSync(assetPath).toString('base64')}` };
+        }),
+    };
+}
+
 function saveSession(sessionId, data) {
     const sessionPath = getSessionPath(sessionId);
 
@@ -626,7 +902,7 @@ function saveSession(sessionId, data) {
 }
 
 function getSession(sessionId) {
-    return readJsonFile(getSessionPath(sessionId), null);
+    return hydrateScreenshotAssets(readJsonFile(getSessionPath(sessionId), null));
 }
 
 function getAllSessions() {
@@ -678,8 +954,9 @@ function deleteSession(sessionId) {
     try {
         if (fs.existsSync(sessionPath)) {
             fs.unlinkSync(sessionPath);
-            return true;
         }
+        fs.rmSync(getSessionAssetDir(sessionId), { recursive: true, force: true });
+        return true;
     } catch (error) {
         console.error('Error deleting session:', error.message);
     }
@@ -694,6 +971,7 @@ function deleteAllSessions() {
             files.forEach(file => {
                 fs.unlinkSync(path.join(historyDir, file));
             });
+            fs.rmSync(path.join(historyDir, 'assets'), { recursive: true, force: true });
         }
         return true;
     } catch (error) {
@@ -763,6 +1041,8 @@ module.exports = {
 
     // History
     saveSession,
+    saveScreenshotAsset,
+    deleteScreenshotAsset,
     getSession,
     getAllSessions,
     deleteSession,

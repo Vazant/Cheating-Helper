@@ -13,13 +13,13 @@ const appSource = fs.readFileSync(require.resolve('../src/components/app/Cheatin
 const viewSource = fs.readFileSync(require.resolve('../src/components/views/AssistantView'), 'utf8');
 const geminiSource = fs.readFileSync(require.resolve('../src/utils/gemini'), 'utf8');
 const localSource = fs.readFileSync(require.resolve('../src/utils/localai'), 'utf8');
-assert.ok(appSource.includes("this.responses.findIndex(item => item.id === update.id)"));
-assert.ok(appSource.includes("question: update.question || current.question"));
+assert.ok(appSource.includes('this.responses.findIndex(item => item.id === update.id)'));
+assert.ok(appSource.includes('question: update.question || current.question'));
 assert.ok(viewSource.includes('class="question-container"'));
 assert.ok(viewSource.includes('getCurrentQuestion()'));
-assert.ok(geminiSource.includes('createResponsePayload(displayText, transcription, responseId)'));
+assert.ok(geminiSource.includes('createResponsePayload(displayText, responseSourceText, responseId)'));
+assert.ok(geminiSource.includes("responseSourceText: ''"));
 assert.ok(localSource.includes('createResponsePayload(fullText, transcription, responseId)'));
-assert.ok(geminiSource.includes("sendToRenderer('new-response', createResponsePayload(text))"));
 assert.ok(localSource.includes("createResponsePayload(fullText, '', responseId)"));
 
 console.log('Question and answer presentation contract: OK');

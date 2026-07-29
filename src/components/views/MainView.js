@@ -799,8 +799,13 @@ export class MainView extends LitElement {
         this.requestUpdate();
     }
 
-    _handleProfileChange(e) {
-        this.onProfileChange(e.target.value);
+    async _handleProfileChange(e) {
+        try {
+            await this.onProfileChange(e.target.value);
+        } catch (error) {
+            console.error('Could not save active profile:', error);
+            this.requestUpdate();
+        }
     }
 
     // ── Start ──

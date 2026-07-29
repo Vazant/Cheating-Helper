@@ -42,10 +42,11 @@ test('session metrics are reset, bounded and exposed without conversation conten
     assert.ok(!recorder.includes('groqApiKey'));
 });
 
-test('Text, STT and Vision emit the same safe metric contract', () => {
+test('Text, STT, Vision extraction and Vision response emit the same safe metric contract', () => {
     const source = fs.readFileSync(require.resolve('../src/utils/gemini'), 'utf8');
 
-    for (const stage of ['text', 'stt', 'vision']) assert.ok(source.includes(`stage: '${stage}'`));
+    assert.ok(source.includes("const metricStage = options.stage || 'text'"));
+    for (const stage of ['stt', 'vision-extraction', 'vision-response']) assert.ok(source.includes(`stage: '${stage}'`));
     for (const field of [
         'estimatedInputTokens',
         'includedPairs',
